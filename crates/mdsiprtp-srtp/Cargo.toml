@@ -15,11 +15,22 @@ aes = "0.8"
 ctr = "0.9"
 hmac = "0.12"
 sha1 = "0.10"
+sha2 = "0.10"
 base64 = "0.22"
+
+# DTLS
+openssl = { version = "0.10", optional = true }
 
 # Error handling
 thiserror.workspace = true
 
+# Logging
+tracing.workspace = true
+
 # Utilities
 bytes.workspace = true
 rand.workspace = true
+
+[features]
+default = []
+dtls = ["openssl"]

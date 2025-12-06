@@ -18,13 +18,22 @@
 //! ```
 
 pub mod call;
+pub mod hold;
 pub mod manager;
 pub mod registration;
+pub mod transfer;
 
 // Re-export main types
 pub use call::{
     Call, CallConfig, CallDirection, CallEndReason, CallEvent, CallId, CallState, Dialog,
     MediaSession,
 };
+pub use hold::{
+    CallHoldInfo, HoldError, HoldManager, HoldRequest, HoldResponse, HoldState, MediaDirection,
+};
 pub use manager::{CallManager, ManagerConfig, ManagerEvent};
 pub use registration::{RegistrationConfig, RegistrationError, RegistrationManager, RegistrationState};
+pub use transfer::{
+    ReferTo, ReplacesHeader, TransferError, TransferInfo, TransferManager, TransferProgress,
+    TransferRole, TransferState, TransferType,
+};

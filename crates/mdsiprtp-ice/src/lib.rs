@@ -27,7 +27,9 @@
 pub mod agent;
 pub mod candidate;
 pub mod stun;
+pub mod turn;
 
 pub use agent::{IceAgent, IceConfig, IceError, IceRole, IceState, CandidatePair, PairState};
 pub use candidate::{Candidate, CandidateType, Transport};
 pub use stun::{StunClient, StunError, StunServer};
+pub use turn::{TurnAllocation, TurnClient, TurnError, TurnServer};

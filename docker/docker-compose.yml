@@ -1,0 +1,33 @@
+# Docker Compose for mdsiprtp integration testing
+#
+# Usage:
+#   docker compose up -d          # Start Asterisk
+#   docker compose logs -f        # View logs
+#   docker compose down           # Stop and cleanup
+
+version: '3.8'
+
+services:
+  asterisk:
+    build:
+      context: ./asterisk
+    container_name: mdsiprtp-asterisk
+    ports:
+      - "5060:5060/udp"
+      - "5060:5060/tcp"
+      - "10000-10100:10000-10100/udp"  # Limited RTP range for testing
+    networks:
+      - sip-net
+    healthcheck:
+      test: ["CMD", "asterisk", "-rx", "core show channels"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+networks:
+  sip-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

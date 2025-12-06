@@ -28,6 +28,7 @@
 //! # }
 //! ```
 
+pub mod resolver;
 pub mod tcp;
 pub mod tls;
 pub mod traits;
@@ -40,3 +41,4 @@ pub use traits::{
 pub use udp::{UdpSender, UdpTransport, MAX_UDP_SIZE, MTU_SAFE_SIZE};
 pub use tcp::{TcpSender, TcpTransport, MAX_TCP_SIZE};
 pub use tls::{TlsClientConfig, TlsSender, TlsServerConfig, TlsTransport, MAX_TLS_SIZE};
+pub use resolver::{ResolvedTarget, ResolverError, SipResolver};

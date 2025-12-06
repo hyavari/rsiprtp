@@ -19,3 +19,6 @@ tokio-rustls.workspace = true
 rustls.workspace = true
 rustls-pemfile.workspace = true
 webpki-roots.workspace = true
+
+# DNS
+hickory-resolver = "0.24"
