@@ -8,6 +8,9 @@ pub mod headers;
 pub mod message;
 pub mod uri;
 
+#[cfg(test)]
+mod tests;
+
 // Re-export main types
 pub use message::{
     generate_branch, generate_call_id, generate_tag, Method, SipMessage, SipRequest,

@@ -49,3 +49,6 @@ pub use server::non_invite::{
     Action as NonInviteServerAction, Event as NonInviteServerEvent, State as NonInviteServerState,
 };
 pub use timer::{ActiveTimer, Timer, TimerValues};
+
+#[cfg(test)]
+mod tests;

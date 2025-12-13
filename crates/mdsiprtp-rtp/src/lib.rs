@@ -25,6 +25,9 @@ pub mod packet;
 pub mod rtcp;
 pub mod session;
 
+#[cfg(test)]
+mod tests;
+
 // Re-export main types
 pub use dtmf::{DtmfDigit, DtmfEvent, DtmfReceiver, DtmfSender};
 pub use packet::{

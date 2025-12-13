@@ -700,7 +700,7 @@ mod tests {
     #[test]
     fn test_update_timestamp() {
         let mut session = RtpSession::new(12345, 0, 8000);
-        let initial_ts = session.current_timestamp;
+        let _initial_ts = session.current_timestamp;
 
         // Small sleep to ensure some time passes
         std::thread::sleep(Duration::from_millis(10));

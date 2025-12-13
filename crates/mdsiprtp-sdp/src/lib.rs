@@ -30,6 +30,9 @@ pub mod builder;
 pub mod negotiation;
 pub mod parser;
 
+#[cfg(test)]
+mod tests;
+
 // Re-export main types
 pub use builder::{MediaBuilder, SdpBuilder};
 pub use negotiation::{create_answer, process_answer, Codec, NegotiatedMedia};

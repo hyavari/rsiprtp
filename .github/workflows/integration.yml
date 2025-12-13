@@ -1,0 +1,90 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  integration:
+    name: Integration Tests with Baresip
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install baresip
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y baresip baresip-core
+
+      - name: Verify baresip installation
+        run: |
+          which baresip
+          baresip -h || true
+
+      - name: Build
+        run: cargo build --workspace
+
+      - name: Run unit tests
+        run: cargo test --workspace
+
+      - name: Run integration tests (framework only)
+        run: cargo test --package mdsiprtp --test baresip_integration -- --test-threads=1
+
+      - name: Run integration tests with baresip
+        run: cargo test --package mdsiprtp --test baresip_integration -- --include-ignored --test-threads=1
+        continue-on-error: true  # Some tests may be flaky in CI
+
+  unit-only:
+    name: Unit Tests Only
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build
+        run: cargo build --workspace
+
+      - name: Run all unit tests
+        run: cargo test --workspace
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Run clippy
+        run: cargo clippy --workspace -- -D warnings

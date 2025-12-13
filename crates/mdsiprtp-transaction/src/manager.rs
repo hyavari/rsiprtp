@@ -786,7 +786,7 @@ mod tests {
     fn test_cleanup_terminated() {
         let mut mgr = TransactionManager::new(false);
         let invite = create_invite();
-        let handle = mgr.create_client_transaction(invite.clone()).unwrap();
+        let _handle = mgr.create_client_transaction(invite.clone()).unwrap();
         mgr.poll_actions();
 
         // Receive 200 OK to complete the transaction

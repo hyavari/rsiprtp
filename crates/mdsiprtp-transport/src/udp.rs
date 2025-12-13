@@ -338,7 +338,7 @@ mod tests {
         }
 
         // Receive all
-        for i in 0..3 {
+        for _ in 0..3 {
             let msg = rx.recv().await.unwrap();
             assert!(msg.data.starts_with(b"MSG_"));
         }

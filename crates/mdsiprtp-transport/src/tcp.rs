@@ -712,12 +712,12 @@ mod tests {
         let server = TcpTransport::bind(server_addr).await.unwrap();
         let server_addr = server.local_addr();
 
-        let (mut server_rx, server_sender) = server.start();
+        let (mut server_rx, _server_sender) = server.start();
 
         // Create client
         let client_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
         let client = TcpTransport::bind(client_addr).await.unwrap();
-        let (mut client_rx, _client_sender) = client.start();
+        let (_client_rx, _client_sender) = client.start();
 
         // Client sends to server
         let client_transport =
