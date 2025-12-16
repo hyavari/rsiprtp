@@ -367,4 +367,220 @@ mod tests {
         assert!(!info.update_remote_seq(1)); // Old seq rejected
         assert!(!info.update_remote_seq(2)); // Same seq rejected
     }
+
+    // Additional tests for coverage
+
+    #[test]
+    fn test_dialog_id_new() {
+        let id = DialogId::new("call123", "local456", "remote789");
+        assert_eq!(id.call_id, "call123");
+        assert_eq!(id.local_tag, "local456");
+        assert_eq!(id.remote_tag, "remote789");
+    }
+
+    #[test]
+    fn test_dialog_id_clone() {
+        let id = DialogId::new("call123", "local456", "remote789");
+        let cloned = id.clone();
+        assert_eq!(cloned.call_id, id.call_id);
+        assert_eq!(cloned.local_tag, id.local_tag);
+        assert_eq!(cloned.remote_tag, id.remote_tag);
+    }
+
+    #[test]
+    fn test_dialog_id_eq() {
+        let id1 = DialogId::new("call123", "local456", "remote789");
+        let id2 = DialogId::new("call123", "local456", "remote789");
+        let id3 = DialogId::new("call999", "local456", "remote789");
+        assert_eq!(id1, id2);
+        assert_ne!(id1, id3);
+    }
+
+    #[test]
+    fn test_dialog_id_hash() {
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(DialogId::new("call123", "local456", "remote789"));
+        assert!(set.contains(&DialogId::new("call123", "local456", "remote789")));
+        assert!(!set.contains(&DialogId::new("call999", "local456", "remote789")));
+    }
+
+    #[test]
+    fn test_dialog_id_debug() {
+        let id = DialogId::new("call123", "local456", "remote789");
+        let debug = format!("{:?}", id);
+        assert!(debug.contains("call123"));
+        assert!(debug.contains("local456"));
+        assert!(debug.contains("remote789"));
+    }
+
+    #[test]
+    fn test_dialog_state_all_variants() {
+        let states = [
+            DialogState::Early,
+            DialogState::Confirmed,
+            DialogState::Terminating,
+            DialogState::Terminated,
+        ];
+        for state in states {
+            let _ = format!("{:?}", state);
+        }
+    }
+
+    #[test]
+    fn test_dialog_state_clone() {
+        let state = DialogState::Early;
+        let cloned = state;
+        assert_eq!(state, cloned);
+    }
+
+    #[test]
+    fn test_route_set_new() {
+        let route_set = RouteSet::new();
+        assert!(route_set.is_empty());
+        assert_eq!(route_set.len(), 0);
+        assert!(!route_set.is_loose_routing());
+    }
+
+    #[test]
+    fn test_route_set_default() {
+        let route_set = RouteSet::default();
+        assert!(route_set.is_empty());
+        assert!(!route_set.is_loose_routing());
+    }
+
+    #[test]
+    fn test_route_set_routes() {
+        let routes = RouteSet::new();
+        assert!(routes.routes().is_empty());
+    }
+
+    #[test]
+    fn test_route_set_from_record_route_values() {
+        let record_routes = vec![
+            "<sip:proxy1.example.com;lr>".to_string(),
+            "<sip:proxy2.example.com;lr>".to_string(),
+        ];
+
+        let route_set = RouteSet::from_record_route_values(&record_routes, false);
+        assert!(!route_set.is_empty());
+        assert_eq!(route_set.len(), 2);
+        // The lr parameter detection depends on parsing
+        // Just check that routes are not empty
+    }
+
+    #[test]
+    fn test_route_set_from_record_route_values_reversed() {
+        let record_routes = vec![
+            "<sip:proxy1.example.com;lr>".to_string(),
+            "<sip:proxy2.example.com;lr>".to_string(),
+        ];
+
+        let route_set = RouteSet::from_record_route_values(&record_routes, true);
+        assert!(!route_set.is_empty());
+        assert_eq!(route_set.len(), 2);
+        // Routes should be reversed
+        let routes = route_set.routes();
+        assert!(routes[0].contains("proxy2"));
+        assert!(routes[1].contains("proxy1"));
+    }
+
+    #[test]
+    fn test_route_set_from_record_route_values_no_lr() {
+        let record_routes = vec!["<sip:proxy1.example.com>".to_string()];
+
+        let route_set = RouteSet::from_record_route_values(&record_routes, false);
+        assert!(!route_set.is_empty());
+        // No lr parameter
+        assert!(!route_set.is_loose_routing());
+    }
+
+    #[test]
+    fn test_route_set_from_record_route_values_empty() {
+        let record_routes: Vec<String> = vec![];
+        let route_set = RouteSet::from_record_route_values(&record_routes, false);
+        assert!(route_set.is_empty());
+        assert!(!route_set.is_loose_routing());
+    }
+
+    #[test]
+    fn test_route_set_debug() {
+        let route_set = RouteSet::new();
+        let debug = format!("{:?}", route_set);
+        assert!(debug.contains("RouteSet"));
+    }
+
+    #[test]
+    fn test_route_set_clone() {
+        let record_routes = vec!["<sip:proxy.example.com;lr>".to_string()];
+        let route_set = RouteSet::from_record_route_values(&record_routes, false);
+        let cloned = route_set.clone();
+        assert_eq!(cloned.len(), route_set.len());
+        assert_eq!(cloned.is_loose_routing(), route_set.is_loose_routing());
+    }
+
+    #[test]
+    fn test_dialog_info_from_invite_uas() {
+        let invite = create_invite();
+        let info = DialogInfo::from_invite_uas(&invite, "mytag", "sip:me@192.168.1.2:5060", DialogState::Early);
+
+        assert!(info.is_some());
+        let info = info.unwrap();
+        assert_eq!(info.state, DialogState::Early);
+        assert_eq!(info.id.local_tag, "mytag");
+        assert_eq!(info.id.remote_tag, "fromtag");
+        assert_eq!(info.local_seq, 0);
+        assert!(info.remote_seq.is_some());
+        assert_eq!(info.remote_seq.unwrap(), 1);
+    }
+
+    #[test]
+    fn test_dialog_id_from_request_uac() {
+        let invite = create_invite();
+        let id = DialogId::from_request_uac(&invite, "remote_tag");
+
+        assert!(id.is_some());
+        let id = id.unwrap();
+        assert_eq!(id.call_id, "test@example.com");
+        assert_eq!(id.local_tag, "fromtag");
+        assert_eq!(id.remote_tag, "remote_tag");
+    }
+
+    #[test]
+    fn test_dialog_info_secure_transport_detection() {
+        // Test the detect_secure_transport function indirectly
+        // The TLS transport detection checks the Via protocol
+        let invite = create_invite(); // Uses UDP
+        let is_secure = DialogInfo::detect_secure_transport(&invite);
+        assert!(!is_secure); // UDP is not secure
+    }
+
+    #[test]
+    fn test_dialog_info_secure_transport_udp() {
+        let invite = create_invite(); // Uses UDP
+        let info = DialogInfo::from_invite_uas(&invite, "mytag", "sip:me@192.168.1.2:5060", DialogState::Early).unwrap();
+        assert!(!info.secure);
+    }
+
+    #[test]
+    fn test_dialog_info_clone() {
+        let invite = create_invite();
+        let response = create_response(&invite);
+        let info = DialogInfo::from_invite_response_uac(&invite, &response, DialogState::Confirmed).unwrap();
+        let cloned = info.clone();
+
+        assert_eq!(cloned.id.call_id, info.id.call_id);
+        assert_eq!(cloned.state, info.state);
+        assert_eq!(cloned.local_seq, info.local_seq);
+        assert_eq!(cloned.remote_seq, info.remote_seq);
+    }
+
+    #[test]
+    fn test_dialog_info_debug() {
+        let invite = create_invite();
+        let response = create_response(&invite);
+        let info = DialogInfo::from_invite_response_uac(&invite, &response, DialogState::Confirmed).unwrap();
+        let debug = format!("{:?}", info);
+        assert!(debug.contains("DialogInfo"));
+    }
 }
