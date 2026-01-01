@@ -607,7 +607,9 @@ mod tests {
     #[test]
     fn test_get_rtp_header_len_too_short_for_extension() {
         // RTP with extension flag set but not enough data
-        let rtp = vec![0x90, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01];
+        let rtp = vec![
+            0x90, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+        ];
         // Only 12 bytes, needs 4 more for extension header
 
         let result = get_rtp_header_len(&rtp);

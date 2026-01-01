@@ -1453,7 +1453,8 @@ mod tests {
         let local_addr = local_socket.local_addr().unwrap();
 
         // Use unreachable address for timeout
-        let unreachable_addr = SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, 1)), 9999);
+        let unreachable_addr =
+            SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, 1)), 9999);
 
         let local_cand = Candidate::host(local_addr, 1);
         let remote_cand = Candidate::host(unreachable_addr, 1);
@@ -1513,7 +1514,10 @@ mod tests {
             .perform_connectivity_check(&local_socket, &pair, "remoteufrag", "remotepwd")
             .await;
 
-        assert!(!result, "Connectivity check should fail with invalid response");
+        assert!(
+            !result,
+            "Connectivity check should fail with invalid response"
+        );
     }
 
     // Test: perform_connectivity_check with wrong transaction ID
@@ -1558,7 +1562,10 @@ mod tests {
             .perform_connectivity_check(&local_socket, &pair, "remoteufrag", "remotepwd")
             .await;
 
-        assert!(!result, "Connectivity check should fail with wrong transaction ID");
+        assert!(
+            !result,
+            "Connectivity check should fail with wrong transaction ID"
+        );
     }
 
     // Test: Controlling agent nominates successful pair
@@ -1602,7 +1609,10 @@ mod tests {
 
         // Verify controlling agent nominated the pair
         let selected = agent.selected_pair().await.unwrap();
-        assert!(selected.nominated, "Controlling agent should nominate successful pair");
+        assert!(
+            selected.nominated,
+            "Controlling agent should nominate successful pair"
+        );
         assert_eq!(selected.state, PairState::Succeeded);
         assert_eq!(agent.state().await, IceState::Connected);
     }
@@ -1685,7 +1695,10 @@ mod tests {
 
         // Host candidates have higher priority than srflx
         // So first pair should have host local candidate
-        assert!(pairs[0].priority >= pairs[1].priority, "Pairs should be sorted by priority");
+        assert!(
+            pairs[0].priority >= pairs[1].priority,
+            "Pairs should be sorted by priority"
+        );
     }
 
     // Test: unfreeze_related_pairs functionality
@@ -1718,7 +1731,9 @@ mod tests {
 
         agent.local_candidates.write().await.push(local1.clone());
         agent.local_candidates.write().await.push(local2);
-        agent.add_remote_candidates(vec![remote1.clone(), remote2]).await;
+        agent
+            .add_remote_candidates(vec![remote1.clone(), remote2])
+            .await;
 
         // Set all pairs to Frozen except first
         {
@@ -1746,7 +1761,10 @@ mod tests {
 
         // Check that pairs with same foundation are now Waiting
         let pairs = agent.candidate_pairs.read().await;
-        let unfrozen_count = pairs.iter().filter(|p| p.state == PairState::Waiting).count();
+        let unfrozen_count = pairs
+            .iter()
+            .filter(|p| p.state == PairState::Waiting)
+            .count();
         assert!(unfrozen_count > 0, "Related pairs should be unfrozen");
     }
 
@@ -1811,7 +1829,10 @@ mod tests {
         };
 
         let result = agent.stun_binding_request(&local_socket, &server).await;
-        assert!(result.is_err(), "STUN request to unreachable server should timeout");
+        assert!(
+            result.is_err(),
+            "STUN request to unreachable server should timeout"
+        );
     }
 
     // Test: stun_binding_request with invalid response (bad magic cookie)
@@ -1849,7 +1870,10 @@ mod tests {
         });
 
         let result = agent.stun_binding_request(&local_socket, &server).await;
-        assert!(result.is_err(), "STUN request should fail with bad magic cookie");
+        assert!(
+            result.is_err(),
+            "STUN request should fail with bad magic cookie"
+        );
     }
 
     // Test: stun_binding_request with missing XOR-MAPPED-ADDRESS
@@ -1890,7 +1914,10 @@ mod tests {
         });
 
         let result = agent.stun_binding_request(&local_socket, &server).await;
-        assert!(result.is_err(), "STUN request should fail without mapped address");
+        assert!(
+            result.is_err(),
+            "STUN request should fail without mapped address"
+        );
     }
 
     // Test: gather_srflx_candidates with STUN server
@@ -1933,7 +1960,10 @@ mod tests {
         let srflx_candidates = agent.gather_srflx_candidates().await;
 
         // Should have at least one srflx candidate
-        assert!(!srflx_candidates.is_empty(), "Should gather srflx candidates");
+        assert!(
+            !srflx_candidates.is_empty(),
+            "Should gather srflx candidates"
+        );
         assert!(srflx_candidates
             .iter()
             .any(|c| c.candidate_type == CandidateType::ServerReflexive));
@@ -2041,7 +2071,10 @@ mod tests {
         let pairs = agent.candidate_pairs.read().await;
 
         // First pair of each foundation should be Waiting, others Frozen
-        let waiting_count = pairs.iter().filter(|p| p.state == PairState::Waiting).count();
+        let waiting_count = pairs
+            .iter()
+            .filter(|p| p.state == PairState::Waiting)
+            .count();
         assert!(waiting_count > 0, "At least one pair should be Waiting");
     }
 
@@ -2061,11 +2094,16 @@ mod tests {
         let local_addr = local_socket.local_addr().unwrap();
 
         // Use unreachable address so check fails
-        let unreachable_addr = SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, 1)), 9999);
+        let unreachable_addr =
+            SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, 1)), 9999);
 
         let local_cand = Candidate::host(local_addr, 1);
         agent.local_candidates.write().await.push(local_cand);
-        agent.sockets.write().await.insert(local_addr, Arc::new(local_socket));
+        agent
+            .sockets
+            .write()
+            .await
+            .insert(local_addr, Arc::new(local_socket));
 
         let remote_cand = Candidate::host(unreachable_addr, 1);
         agent.add_remote_candidates(vec![remote_cand]).await;
@@ -2082,7 +2120,10 @@ mod tests {
 
         // Check pair state was updated to Failed
         let pairs = agent.candidate_pairs.read().await;
-        assert!(pairs.iter().any(|p| p.state == PairState::Failed), "Failed check should mark pair as Failed");
+        assert!(
+            pairs.iter().any(|p| p.state == PairState::Failed),
+            "Failed check should mark pair as Failed"
+        );
     }
 
     // Test: Controlled agent uses correct ICE-CONTROLLED attribute
@@ -2117,9 +2158,7 @@ mod tests {
             let mut buf = vec![0u8; 1024];
             if let Ok((len, peer)) = mock_socket.recv_from(&mut buf).await {
                 // Check for ICE-CONTROLLED attribute (0x8029)
-                let has_controlled = buf[..len]
-                    .windows(2)
-                    .any(|w| w[0] == 0x80 && w[1] == 0x29);
+                let has_controlled = buf[..len].windows(2).any(|w| w[0] == 0x80 && w[1] == 0x29);
 
                 if has_controlled && len >= 20 {
                     let mut txn_id = [0u8; 12];
@@ -2184,8 +2223,14 @@ mod tests {
             1,
         );
 
-        agent_controlling.local_candidates.write().await.push(local.clone());
-        agent_controlling.add_remote_candidates(vec![remote.clone()]).await;
+        agent_controlling
+            .local_candidates
+            .write()
+            .await
+            .push(local.clone());
+        agent_controlling
+            .add_remote_candidates(vec![remote.clone()])
+            .await;
 
         agent_controlled.local_candidates.write().await.push(local);
         agent_controlled.add_remote_candidates(vec![remote]).await;
@@ -2194,8 +2239,10 @@ mod tests {
         let pairs_controlling = agent_controlling.candidate_pairs.read().await;
         let pairs_controlled = agent_controlled.candidate_pairs.read().await;
 
-        assert_eq!(pairs_controlling[0].priority, pairs_controlled[0].priority,
-            "Same pair should have same priority from both perspectives");
+        assert_eq!(
+            pairs_controlling[0].priority, pairs_controlled[0].priority,
+            "Same pair should have same priority from both perspectives"
+        );
     }
 
     // Test: gather_candidates sets state to Gathering
@@ -2288,7 +2335,8 @@ mod tests {
                         // Found USERNAME
                         let username = String::from_utf8_lossy(&buf[i + 4..i + 4 + attr_len]);
                         // Should be "remoteusr:localusr"
-                        found_username = username.contains("remoteusr") && username.contains("localusr");
+                        found_username =
+                            username.contains("remoteusr") && username.contains("localusr");
                         break;
                     }
 

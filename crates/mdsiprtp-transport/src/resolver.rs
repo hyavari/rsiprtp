@@ -175,12 +175,7 @@ impl SipResolver {
                 let replacement = naptr.replacement().to_string();
 
                 // Parse SIP NAPTR services
-                let transport = match service.as_str() {
-                    "SIP+D2U" | "sip+d2u" => Some(TransportProtocol::Udp),
-                    "SIP+D2T" | "sip+d2t" => Some(TransportProtocol::Tcp),
-                    "SIPS+D2T" | "sips+d2t" => Some(TransportProtocol::Tls),
-                    _ => None,
-                };
+                let transport = parse_naptr_transport(&service);
 
                 if let Some(t) = transport {
                     trace!("NAPTR: {} -> {} ({:?})", service, replacement, t);
@@ -319,44 +314,12 @@ impl SipResolver {
     /// # Returns
     /// Resolved target or error.
     pub async fn resolve_uri(&self, uri: &str) -> Result<Vec<ResolvedTarget>> {
-        // Simple URI parsing (in production, use rsip's Uri parser)
-        let uri = uri.trim_start_matches("sip:").trim_start_matches("sips:");
-
-        // Extract domain (after @ if present)
-        let domain_part = uri.split('@').next_back().unwrap_or(uri);
-
-        // Parse host:port and parameters
-        let (host_port, params) = domain_part
-            .split_once(';')
-            .map(|(h, p)| (h, Some(p)))
-            .unwrap_or((domain_part, None));
-
-        let (host, explicit_port) = host_port
-            .split_once(':')
-            .map(|(h, p)| (h, p.parse().ok()))
-            .unwrap_or((host_port, None));
-
-        // Parse transport parameter
-        let transport = params.and_then(|p| {
-            p.split(';').find_map(|param| {
-                let (k, v) = param.split_once('=')?;
-                if k.eq_ignore_ascii_case("transport") {
-                    match v.to_lowercase().as_str() {
-                        "udp" => Some(TransportProtocol::Udp),
-                        "tcp" => Some(TransportProtocol::Tcp),
-                        "tls" => Some(TransportProtocol::Tls),
-                        _ => None,
-                    }
-                } else {
-                    None
-                }
-            })
-        });
+        let (host, port, transport) = parse_sip_uri_internal(uri);
 
         // If explicit port, skip SRV lookup
-        if let Some(port) = explicit_port {
+        if let Some(port) = port {
             let transport = transport.unwrap_or(TransportProtocol::Udp);
-            let addresses = self.resolve_addresses(host).await.unwrap_or_default();
+            let addresses = self.resolve_addresses(&host).await.unwrap_or_default();
 
             return Ok(vec![ResolvedTarget {
                 host: host.to_string(),
@@ -369,8 +332,79 @@ impl SipResolver {
         }
 
         // Use standard resolution
-        self.resolve(host, transport).await
+        self.resolve(&host, transport).await
     }
+}
+
+/// Parse NAPTR service string.
+fn parse_naptr_transport(service: &str) -> Option<TransportProtocol> {
+    match service {
+        "SIP+D2U" | "sip+d2u" => Some(TransportProtocol::Udp),
+        "SIP+D2T" | "sip+d2t" => Some(TransportProtocol::Tcp),
+        "SIPS+D2T" | "sips+d2t" => Some(TransportProtocol::Tls),
+        _ => None,
+    }
+}
+
+/// Internal URI parsing helper.
+fn parse_sip_uri_internal(uri: &str) -> (String, Option<u16>, Option<TransportProtocol>) {
+    // Simple URI parsing (in production, use rsip's Uri parser)
+    let uri = uri
+        .trim_start_matches("sip:")
+        .trim_start_matches("sips:")
+        .trim_start_matches("SIP:")
+        .trim_start_matches("SIPS:");
+
+    // Extract domain (after @ if present)
+    let domain_part = uri.split('@').next_back().unwrap_or(uri);
+
+    // Parse host:port and parameters
+    let (host_port, params) = domain_part
+        .split_once(';')
+        .map(|(h, p)| (h, Some(p)))
+        .unwrap_or((domain_part, None));
+
+    let (host, explicit_port) = if host_port.starts_with('[') {
+        // Try to find closing bracket
+        if let Some(end_bracket) = host_port.find(']') {
+            if host_port.len() > end_bracket + 1 && host_port.as_bytes()[end_bracket + 1] == b':' {
+                // [IPv6]:port
+                let h = &host_port[..=end_bracket];
+                let p = &host_port[end_bracket + 2..];
+                (h, p.parse().ok())
+            } else {
+                // [IPv6]
+                (host_port, None)
+            }
+        } else {
+            // Malformed
+            (host_port, None)
+        }
+    } else {
+        host_port
+            .split_once(':')
+            .map(|(h, p)| (h, p.parse().ok()))
+            .unwrap_or((host_port, None))
+    };
+
+    // Parse transport parameter
+    let transport = params.and_then(|p| {
+        p.split(';').find_map(|param| {
+            let (k, v) = param.split_once('=')?;
+            if k.eq_ignore_ascii_case("transport") {
+                match v.to_lowercase().as_str() {
+                    "udp" => Some(TransportProtocol::Udp),
+                    "tcp" => Some(TransportProtocol::Tcp),
+                    "tls" => Some(TransportProtocol::Tls),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        })
+    });
+
+    (host.to_string(), explicit_port, transport)
 }
 
 #[cfg(test)]
@@ -866,7 +900,7 @@ mod tests {
         assert_eq!(targets[0].weight, 150); // Higher weight
         assert_eq!(targets[1].priority, 5);
         assert_eq!(targets[1].weight, 50); // Lower weight
-        // Then priority 10
+                                           // Then priority 10
         assert_eq!(targets[2].priority, 10);
         assert_eq!(targets[2].weight, 200);
         assert_eq!(targets[3].priority, 10);
@@ -932,9 +966,24 @@ mod tests {
     #[test]
     fn test_naptr_sorting_by_order() {
         let mut services = vec![
-            (30u16, 50u16, "srv3.example.com".to_string(), TransportProtocol::Tcp),
-            (10u16, 50u16, "srv1.example.com".to_string(), TransportProtocol::Udp),
-            (20u16, 50u16, "srv2.example.com".to_string(), TransportProtocol::Tls),
+            (
+                30u16,
+                50u16,
+                "srv3.example.com".to_string(),
+                TransportProtocol::Tcp,
+            ),
+            (
+                10u16,
+                50u16,
+                "srv1.example.com".to_string(),
+                TransportProtocol::Udp,
+            ),
+            (
+                20u16,
+                50u16,
+                "srv2.example.com".to_string(),
+                TransportProtocol::Tls,
+            ),
         ];
 
         // Apply same sorting as lookup_naptr
@@ -950,9 +999,24 @@ mod tests {
     #[test]
     fn test_naptr_sorting_by_preference_when_order_equal() {
         let mut services = vec![
-            (10u16, 100u16, "srv3.example.com".to_string(), TransportProtocol::Tcp),
-            (10u16, 50u16, "srv1.example.com".to_string(), TransportProtocol::Udp),
-            (10u16, 75u16, "srv2.example.com".to_string(), TransportProtocol::Tls),
+            (
+                10u16,
+                100u16,
+                "srv3.example.com".to_string(),
+                TransportProtocol::Tcp,
+            ),
+            (
+                10u16,
+                50u16,
+                "srv1.example.com".to_string(),
+                TransportProtocol::Udp,
+            ),
+            (
+                10u16,
+                75u16,
+                "srv2.example.com".to_string(),
+                TransportProtocol::Tls,
+            ),
         ];
 
         services.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
@@ -967,10 +1031,30 @@ mod tests {
     #[test]
     fn test_naptr_sorting_combined_order_and_preference() {
         let mut services = vec![
-            (20u16, 50u16, "srv4.example.com".to_string(), TransportProtocol::Tcp),
-            (10u16, 100u16, "srv2.example.com".to_string(), TransportProtocol::Udp),
-            (10u16, 50u16, "srv1.example.com".to_string(), TransportProtocol::Tls),
-            (20u16, 25u16, "srv3.example.com".to_string(), TransportProtocol::Tcp),
+            (
+                20u16,
+                50u16,
+                "srv4.example.com".to_string(),
+                TransportProtocol::Tcp,
+            ),
+            (
+                10u16,
+                100u16,
+                "srv2.example.com".to_string(),
+                TransportProtocol::Udp,
+            ),
+            (
+                10u16,
+                50u16,
+                "srv1.example.com".to_string(),
+                TransportProtocol::Tls,
+            ),
+            (
+                20u16,
+                25u16,
+                "srv3.example.com".to_string(),
+                TransportProtocol::Tcp,
+            ),
         ];
 
         services.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
@@ -1017,9 +1101,7 @@ mod tests {
         // This is a known limitation of the simple parser
         // IPv6 colons are confused with port separator in simple parsing
         // Test with loopback address which should resolve
-        let targets = resolver
-            .resolve_uri("sip:user@::1:5060")
-            .await;
+        let targets = resolver.resolve_uri("sip:user@::1:5060").await;
         if targets.is_ok() {
             let targets = targets.unwrap();
             assert!(!targets.is_empty());
@@ -1030,9 +1112,7 @@ mod tests {
     async fn test_resolve_uri_trailing_semicolon() {
         let resolver = SipResolver::new().await.unwrap();
 
-        let targets = resolver
-            .resolve_uri("sip:user@192.168.1.1:5060;")
-            .await;
+        let targets = resolver.resolve_uri("sip:user@192.168.1.1:5060;").await;
         assert!(targets.is_ok());
         let targets = targets.unwrap();
         assert_eq!(targets[0].host, "192.168.1.1");
@@ -1084,9 +1164,7 @@ mod tests {
         let resolver = SipResolver::new().await.unwrap();
 
         // Username with special characters
-        let targets = resolver
-            .resolve_uri("sip:user+name@192.168.1.1:5060")
-            .await;
+        let targets = resolver.resolve_uri("sip:user+name@192.168.1.1:5060").await;
         assert!(targets.is_ok());
         let targets = targets.unwrap();
         assert_eq!(targets[0].host, "192.168.1.1");
@@ -1100,7 +1178,10 @@ mod tests {
         // Try to resolve an invalid/nonexistent IP-like string
         // This should fail since it's not a valid IP
         let result = resolver
-            .lookup_address("not.a.valid.ip.address.that.does.not.exist.example", TransportProtocol::Udp)
+            .lookup_address(
+                "not.a.valid.ip.address.that.does.not.exist.example",
+                TransportProtocol::Udp,
+            )
             .await;
 
         // Should return an error
@@ -1305,7 +1386,11 @@ mod tests {
             let targets = resolver.resolve_uri(&uri).await;
             assert!(targets.is_ok());
             let targets = targets.unwrap();
-            assert_eq!(targets[0].transport, expected, "Failed for param: {}", param);
+            assert_eq!(
+                targets[0].transport, expected,
+                "Failed for param: {}",
+                param
+            );
         }
     }
 
@@ -1366,10 +1451,7 @@ mod tests {
             transport: TransportProtocol::Udp,
             priority: 0,
             weight: 0,
-            addresses: vec![
-                "10.0.0.1".parse().unwrap(),
-                "10.0.0.2".parse().unwrap(),
-            ],
+            addresses: vec!["10.0.0.1".parse().unwrap(), "10.0.0.2".parse().unwrap()],
         };
 
         let addrs = target.socket_addrs();
@@ -1394,543 +1476,680 @@ mod tests {
         assert!(addrs.iter().all(|a| a.is_ipv6()));
     }
 
-// Additional comprehensive tests for resolver coverage
+    // Additional comprehensive tests for resolver coverage
 
-// Test error case where lookup_address gets empty addresses
-#[tokio::test]
-async fn test_lookup_address_with_invalid_domain() {
-    let resolver = SipResolver::new().await.unwrap();
+    // Test error case where lookup_address gets empty addresses
+    #[tokio::test]
+    async fn test_lookup_address_with_invalid_domain() {
+        let resolver = SipResolver::new().await.unwrap();
 
-    // This should fail as it's an obviously invalid domain
-    let result = resolver
-        .lookup_address("this.is.definitely.an.invalid.nonexistent.test.domain.12345", TransportProtocol::Udp)
-        .await;
+        // This should fail as it's an obviously invalid domain
+        let result = resolver
+            .lookup_address(
+                "this.is.definitely.an.invalid.nonexistent.test.domain.12345",
+                TransportProtocol::Udp,
+            )
+            .await;
 
-    assert!(result.is_err());
-    // Should be either ResolverError::LookupFailed or ResolverError::NoRecords
-}
-
-// Test the full resolve() method with transport fallback when no preferred transport
-#[tokio::test]
-async fn test_resolve_without_preferred_transport_ip() {
-    let resolver = SipResolver::new().await.unwrap();
-
-    // Using IP will skip SRV and go to A lookup
-    let targets = resolver.resolve("127.0.0.1", None).await;
-
-    assert!(targets.is_ok());
-    let targets = targets.unwrap();
-    assert!(!targets.is_empty());
-    // Should default to UDP when no preference
-    assert_eq!(targets[0].transport, TransportProtocol::Udp);
-}
-
-// Test resolve_uri that goes through resolve() path (no explicit port)
-#[tokio::test]
-async fn test_resolve_uri_without_port_uses_resolve_path() {
-    let resolver = SipResolver::new().await.unwrap();
-
-    // IP without port goes through resolve() -> lookup_address()
-    let targets = resolver.resolve_uri("sip:user@127.0.0.1;transport=tcp").await;
-
-    assert!(targets.is_ok());
-    let targets = targets.unwrap();
-    assert!(!targets.is_empty());
-    assert_eq!(targets[0].transport, TransportProtocol::Tcp);
-    assert_eq!(targets[0].port, 5060); // Default TCP port
-}
-
-// Test resolve_uri with TLS transport and no port
-#[tokio::test]
-async fn test_resolve_uri_tls_without_port() {
-    let resolver = SipResolver::new().await.unwrap();
-
-    let targets = resolver.resolve_uri("sip:user@127.0.0.1;transport=tls").await;
-
-    assert!(targets.is_ok());
-    let targets = targets.unwrap();
-    assert_eq!(targets[0].transport, TransportProtocol::Tls);
-    assert_eq!(targets[0].port, 5061); // Default TLS port
-}
-
-// Test URI parsing with equals sign in parameter value
-#[tokio::test]
-async fn test_resolve_uri_param_with_equals() {
-    let resolver = SipResolver::new().await.unwrap();
-
-    // Make sure transport parameter is still found even with other params
-    let targets = resolver
-        .resolve_uri("sip:user@192.168.1.1:5060;foo=bar=baz;transport=tcp;other=val")
-        .await;
-
-    assert!(targets.is_ok());
-    let targets = targets.unwrap();
-    assert_eq!(targets[0].transport, TransportProtocol::Tcp);
-}
-
-// Test the transport selection logic in resolve() when preferred is Some
-#[tokio::test]
-async fn test_resolve_with_udp_transport_preference() {
-    let resolver = SipResolver::new().await.unwrap();
-
-    let targets = resolver.resolve("127.0.0.1", Some(TransportProtocol::Udp)).await;
-
-    assert!(targets.is_ok());
-    let targets = targets.unwrap();
-    assert_eq!(targets[0].transport, TransportProtocol::Udp);
-    assert_eq!(targets[0].port, 5060);
-}
-
-// Test resolve with TLS preference
-#[tokio::test]
-async fn test_resolve_with_tls_transport_preference() {
-    let resolver = SipResolver::new().await.unwrap();
-
-    let targets = resolver.resolve("127.0.0.1", Some(TransportProtocol::Tls)).await;
-
-    assert!(targets.is_ok());
-    let targets = targets.unwrap();
-    assert_eq!(targets[0].transport, TransportProtocol::Tls);
-    assert_eq!(targets[0].port, 5061);
-}
-
-// Test ResolverError From trait
-#[test]
-fn test_resolver_error_from_hickory_error() {
-    use hickory_resolver::error::ResolveErrorKind;
-
-    let hickory_err = hickory_resolver::error::ResolveError::from(
-        ResolveErrorKind::NoRecordsFound {
-            query: Box::new(hickory_resolver::proto::op::Query::new()),
-            soa: None,
-            negative_ttl: None,
-            response_code: hickory_resolver::proto::op::ResponseCode::NXDomain,
-            trusted: false,
-        }
-    );
-
-    let resolver_err: ResolverError = hickory_err.into();
-
-    // Should be converted to ResolverError::LookupFailed
-    assert!(matches!(resolver_err, ResolverError::LookupFailed(_)));
-}
-
-// Test the default ports for different transports in lookup_address
-#[tokio::test]
-async fn test_lookup_address_port_selection() {
-    let resolver = SipResolver::new().await.unwrap();
-
-    // UDP -> 5060
-    let targets_udp = resolver.lookup_address("127.0.0.1", TransportProtocol::Udp).await.unwrap();
-    assert_eq!(targets_udp[0].port, 5060);
-
-    // TCP -> 5060
-    let targets_tcp = resolver.lookup_address("127.0.0.1", TransportProtocol::Tcp).await.unwrap();
-    assert_eq!(targets_tcp[0].port, 5060);
-
-    // TLS -> 5061
-    let targets_tls = resolver.lookup_address("127.0.0.1", TransportProtocol::Tls).await.unwrap();
-    assert_eq!(targets_tls[0].port, 5061);
-}
-
-// Test resolve_addresses with IPv6
-#[tokio::test]
-async fn test_resolve_addresses_with_ipv6() {
-    let resolver = SipResolver::new().await.unwrap();
-
-    let addrs = resolver.resolve_addresses("::1").await.unwrap();
-    assert_eq!(addrs.len(), 1);
-    assert!(addrs[0].is_ipv6());
-    assert_eq!(addrs[0], "::1".parse::<IpAddr>().unwrap());
-}
-
-// Test resolve_addresses with IPv4
-#[tokio::test]
-async fn test_resolve_addresses_with_ipv4() {
-    let resolver = SipResolver::new().await.unwrap();
-
-    let addrs = resolver.resolve_addresses("127.0.0.1").await.unwrap();
-    assert_eq!(addrs.len(), 1);
-    assert!(addrs[0].is_ipv4());
-    assert_eq!(addrs[0], "127.0.0.1".parse::<IpAddr>().unwrap());
-}
-
-// Test URI parsing edge case - just an IP
-#[tokio::test]
-async fn test_resolve_uri_just_ip_with_port() {
-    let resolver = SipResolver::new().await.unwrap();
-
-    let targets = resolver.resolve_uri("192.168.1.1:5090").await;
-
-    assert!(targets.is_ok());
-    let targets = targets.unwrap();
-    assert_eq!(targets[0].host, "192.168.1.1");
-    assert_eq!(targets[0].port, 5090);
-}
-
-// Test that empty addresses list in lookup_address returns NoRecords error
-#[tokio::test]
-async fn test_lookup_address_no_addresses_returns_error() {
-    let resolver = SipResolver::new().await.unwrap();
-
-    // Try to resolve a nonexistent domain
-    let result = resolver
-        .lookup_address("nonexistent-domain-that-definitely-does-not-exist-12345.invalid", TransportProtocol::Udp)
-        .await;
-
-    assert!(result.is_err());
-}
-
-// Test resolve_uri with mixed case TRANSPORT parameter
-#[tokio::test]
-async fn test_resolve_uri_mixed_case_transport_param_key() {
-    let resolver = SipResolver::new().await.unwrap();
-
-    // Test that Transport (mixed case) is handled
-    let targets = resolver
-        .resolve_uri("sip:user@192.168.1.1:5060;Transport=tcp")
-        .await;
-
-    assert!(targets.is_ok());
-    let targets = targets.unwrap();
-    assert_eq!(targets[0].transport, TransportProtocol::Tcp);
-}
-
-// Test resolve_uri with all uppercase TRANSPORT parameter
-#[tokio::test]
-async fn test_resolve_uri_uppercase_transport_param_key() {
-    let resolver = SipResolver::new().await.unwrap();
-
-    let targets = resolver
-        .resolve_uri("sip:user@192.168.1.1:5060;TRANSPORT=UDP")
-        .await;
-
-    assert!(targets.is_ok());
-    let targets = targets.unwrap();
-    assert_eq!(targets[0].transport, TransportProtocol::Udp);
-}
-
-// Test ResolvedTarget with various transport types
-#[test]
-fn test_resolved_target_with_all_transports() {
-    let transports = vec![
-        TransportProtocol::Udp,
-        TransportProtocol::Tcp,
-        TransportProtocol::Tls,
-    ];
-
-    for transport in transports {
-        let target = ResolvedTarget {
-            host: "test.com".to_string(),
-            port: 5060,
-            transport: transport.clone(),
-            priority: 0,
-            weight: 0,
-            addresses: vec![],
-        };
-
-        assert_eq!(target.transport, transport);
+        assert!(result.is_err());
+        // Should be either ResolverError::LookupFailed or ResolverError::NoRecords
     }
-}
 
-// Test error display for all error variants
-#[test]
-fn test_all_resolver_error_variants_display() {
-    // NoRecords
-    let err1 = ResolverError::NoRecords("test.com".to_string());
-    assert!(err1.to_string().contains("test.com"));
-    assert!(err1.to_string().contains("no DNS records"));
+    // Test the full resolve() method with transport fallback when no preferred transport
+    #[tokio::test]
+    async fn test_resolve_without_preferred_transport_ip() {
+        let resolver = SipResolver::new().await.unwrap();
 
-    // InvalidDomain
-    let err2 = ResolverError::InvalidDomain("bad.domain".to_string());
-    assert!(err2.to_string().contains("bad.domain"));
-    assert!(err2.to_string().contains("invalid domain"));
-}
+        // Using IP will skip SRV and go to A lookup
+        let targets = resolver.resolve("127.0.0.1", None).await;
 
-// Test resolve_uri with no transport parameter defaults to UDP
-#[tokio::test]
-async fn test_resolve_uri_no_transport_defaults_to_udp() {
-    let resolver = SipResolver::new().await.unwrap();
+        assert!(targets.is_ok());
+        let targets = targets.unwrap();
+        assert!(!targets.is_empty());
+        // Should default to UDP when no preference
+        assert_eq!(targets[0].transport, TransportProtocol::Udp);
+    }
 
-    let targets = resolver
-        .resolve_uri("sip:user@192.168.1.1:5060")
-        .await;
+    // Test resolve_uri that goes through resolve() path (no explicit port)
+    #[tokio::test]
+    async fn test_resolve_uri_without_port_uses_resolve_path() {
+        let resolver = SipResolver::new().await.unwrap();
 
-    assert!(targets.is_ok());
-    let targets = targets.unwrap();
-    assert_eq!(targets[0].transport, TransportProtocol::Udp);
-}
+        // IP without port goes through resolve() -> lookup_address()
+        let targets = resolver
+            .resolve_uri("sip:user@127.0.0.1;transport=tcp")
+            .await;
 
-// Test socket_addrs with different port numbers
-#[test]
-fn test_socket_addrs_various_ports() {
-    let ports = vec![5060, 5061, 5080, 8080, 65535];
+        assert!(targets.is_ok());
+        let targets = targets.unwrap();
+        assert!(!targets.is_empty());
+        assert_eq!(targets[0].transport, TransportProtocol::Tcp);
+        assert_eq!(targets[0].port, 5060); // Default TCP port
+    }
 
-    for port in ports {
+    // Test resolve_uri with TLS transport and no port
+    #[tokio::test]
+    async fn test_resolve_uri_tls_without_port() {
+        let resolver = SipResolver::new().await.unwrap();
+
+        let targets = resolver
+            .resolve_uri("sip:user@127.0.0.1;transport=tls")
+            .await;
+
+        assert!(targets.is_ok());
+        let targets = targets.unwrap();
+        assert_eq!(targets[0].transport, TransportProtocol::Tls);
+        assert_eq!(targets[0].port, 5061); // Default TLS port
+    }
+
+    // Test URI parsing with equals sign in parameter value
+    #[tokio::test]
+    async fn test_resolve_uri_param_with_equals() {
+        let resolver = SipResolver::new().await.unwrap();
+
+        // Make sure transport parameter is still found even with other params
+        let targets = resolver
+            .resolve_uri("sip:user@192.168.1.1:5060;foo=bar=baz;transport=tcp;other=val")
+            .await;
+
+        assert!(targets.is_ok());
+        let targets = targets.unwrap();
+        assert_eq!(targets[0].transport, TransportProtocol::Tcp);
+    }
+
+    // Test the transport selection logic in resolve() when preferred is Some
+    #[tokio::test]
+    async fn test_resolve_with_udp_transport_preference() {
+        let resolver = SipResolver::new().await.unwrap();
+
+        let targets = resolver
+            .resolve("127.0.0.1", Some(TransportProtocol::Udp))
+            .await;
+
+        assert!(targets.is_ok());
+        let targets = targets.unwrap();
+        assert_eq!(targets[0].transport, TransportProtocol::Udp);
+        assert_eq!(targets[0].port, 5060);
+    }
+
+    // Test resolve with TLS preference
+    #[tokio::test]
+    async fn test_resolve_with_tls_transport_preference() {
+        let resolver = SipResolver::new().await.unwrap();
+
+        let targets = resolver
+            .resolve("127.0.0.1", Some(TransportProtocol::Tls))
+            .await;
+
+        assert!(targets.is_ok());
+        let targets = targets.unwrap();
+        assert_eq!(targets[0].transport, TransportProtocol::Tls);
+        assert_eq!(targets[0].port, 5061);
+    }
+
+    // Test ResolverError From trait
+    #[test]
+    fn test_resolver_error_from_hickory_error() {
+        use hickory_resolver::error::ResolveErrorKind;
+
+        let hickory_err =
+            hickory_resolver::error::ResolveError::from(ResolveErrorKind::NoRecordsFound {
+                query: Box::new(hickory_resolver::proto::op::Query::new()),
+                soa: None,
+                negative_ttl: None,
+                response_code: hickory_resolver::proto::op::ResponseCode::NXDomain,
+                trusted: false,
+            });
+
+        let resolver_err: ResolverError = hickory_err.into();
+
+        // Should be converted to ResolverError::LookupFailed
+        assert!(matches!(resolver_err, ResolverError::LookupFailed(_)));
+    }
+
+    // Test the default ports for different transports in lookup_address
+    #[tokio::test]
+    async fn test_lookup_address_port_selection() {
+        let resolver = SipResolver::new().await.unwrap();
+
+        // UDP -> 5060
+        let targets_udp = resolver
+            .lookup_address("127.0.0.1", TransportProtocol::Udp)
+            .await
+            .unwrap();
+        assert_eq!(targets_udp[0].port, 5060);
+
+        // TCP -> 5060
+        let targets_tcp = resolver
+            .lookup_address("127.0.0.1", TransportProtocol::Tcp)
+            .await
+            .unwrap();
+        assert_eq!(targets_tcp[0].port, 5060);
+
+        // TLS -> 5061
+        let targets_tls = resolver
+            .lookup_address("127.0.0.1", TransportProtocol::Tls)
+            .await
+            .unwrap();
+        assert_eq!(targets_tls[0].port, 5061);
+    }
+
+    // Test resolve_addresses with IPv6
+    #[tokio::test]
+    async fn test_resolve_addresses_with_ipv6() {
+        let resolver = SipResolver::new().await.unwrap();
+
+        let addrs = resolver.resolve_addresses("::1").await.unwrap();
+        assert_eq!(addrs.len(), 1);
+        assert!(addrs[0].is_ipv6());
+        assert_eq!(addrs[0], "::1".parse::<IpAddr>().unwrap());
+    }
+
+    // Test resolve_addresses with IPv4
+    #[tokio::test]
+    async fn test_resolve_addresses_with_ipv4() {
+        let resolver = SipResolver::new().await.unwrap();
+
+        let addrs = resolver.resolve_addresses("127.0.0.1").await.unwrap();
+        assert_eq!(addrs.len(), 1);
+        assert!(addrs[0].is_ipv4());
+        assert_eq!(addrs[0], "127.0.0.1".parse::<IpAddr>().unwrap());
+    }
+
+    // Test URI parsing edge case - just an IP
+    #[tokio::test]
+    async fn test_resolve_uri_just_ip_with_port() {
+        let resolver = SipResolver::new().await.unwrap();
+
+        let targets = resolver.resolve_uri("192.168.1.1:5090").await;
+
+        assert!(targets.is_ok());
+        let targets = targets.unwrap();
+        assert_eq!(targets[0].host, "192.168.1.1");
+        assert_eq!(targets[0].port, 5090);
+    }
+
+    // Test that empty addresses list in lookup_address returns NoRecords error
+    #[tokio::test]
+    async fn test_lookup_address_no_addresses_returns_error() {
+        let resolver = SipResolver::new().await.unwrap();
+
+        // Try to resolve a nonexistent domain
+        let result = resolver
+            .lookup_address(
+                "nonexistent-domain-that-definitely-does-not-exist-12345.invalid",
+                TransportProtocol::Udp,
+            )
+            .await;
+
+        assert!(result.is_err());
+    }
+
+    // Test resolve_uri with mixed case TRANSPORT parameter
+    #[tokio::test]
+    async fn test_resolve_uri_mixed_case_transport_param_key() {
+        let resolver = SipResolver::new().await.unwrap();
+
+        // Test that Transport (mixed case) is handled
+        let targets = resolver
+            .resolve_uri("sip:user@192.168.1.1:5060;Transport=tcp")
+            .await;
+
+        assert!(targets.is_ok());
+        let targets = targets.unwrap();
+        assert_eq!(targets[0].transport, TransportProtocol::Tcp);
+    }
+
+    // Test resolve_uri with all uppercase TRANSPORT parameter
+    #[tokio::test]
+    async fn test_resolve_uri_uppercase_transport_param_key() {
+        let resolver = SipResolver::new().await.unwrap();
+
+        let targets = resolver
+            .resolve_uri("sip:user@192.168.1.1:5060;TRANSPORT=UDP")
+            .await;
+
+        assert!(targets.is_ok());
+        let targets = targets.unwrap();
+        assert_eq!(targets[0].transport, TransportProtocol::Udp);
+    }
+
+    // Test ResolvedTarget with various transport types
+    #[test]
+    fn test_resolved_target_with_all_transports() {
+        let transports = vec![
+            TransportProtocol::Udp,
+            TransportProtocol::Tcp,
+            TransportProtocol::Tls,
+        ];
+
+        for transport in transports {
+            let target = ResolvedTarget {
+                host: "test.com".to_string(),
+                port: 5060,
+                transport: transport.clone(),
+                priority: 0,
+                weight: 0,
+                addresses: vec![],
+            };
+
+            assert_eq!(target.transport, transport);
+        }
+    }
+
+    // Test error display for all error variants
+    #[test]
+    fn test_all_resolver_error_variants_display() {
+        // NoRecords
+        let err1 = ResolverError::NoRecords("test.com".to_string());
+        assert!(err1.to_string().contains("test.com"));
+        assert!(err1.to_string().contains("no DNS records"));
+
+        // InvalidDomain
+        let err2 = ResolverError::InvalidDomain("bad.domain".to_string());
+        assert!(err2.to_string().contains("bad.domain"));
+        assert!(err2.to_string().contains("invalid domain"));
+    }
+
+    // Test resolve_uri with no transport parameter defaults to UDP
+    #[tokio::test]
+    async fn test_resolve_uri_no_transport_defaults_to_udp() {
+        let resolver = SipResolver::new().await.unwrap();
+
+        let targets = resolver.resolve_uri("sip:user@192.168.1.1:5060").await;
+
+        assert!(targets.is_ok());
+        let targets = targets.unwrap();
+        assert_eq!(targets[0].transport, TransportProtocol::Udp);
+    }
+
+    // Test socket_addrs with different port numbers
+    #[test]
+    fn test_socket_addrs_various_ports() {
+        let ports = vec![5060, 5061, 5080, 8080, 65535];
+
+        for port in ports {
+            let target = ResolvedTarget {
+                host: "test.com".to_string(),
+                port,
+                transport: TransportProtocol::Udp,
+                priority: 0,
+                weight: 0,
+                addresses: vec!["192.168.1.1".parse().unwrap()],
+            };
+
+            let addrs = target.socket_addrs();
+            assert_eq!(addrs[0].port(), port);
+        }
+    }
+
+    // Test that ResolvedTarget fields are accessible
+    #[test]
+    fn test_resolved_target_field_access() {
         let target = ResolvedTarget {
-            host: "test.com".to_string(),
-            port,
-            transport: TransportProtocol::Udp,
-            priority: 0,
-            weight: 0,
+            host: "sip.example.com".to_string(),
+            port: 5060,
+            transport: TransportProtocol::Tcp,
+            priority: 10,
+            weight: 100,
             addresses: vec!["192.168.1.1".parse().unwrap()],
         };
 
-        let addrs = target.socket_addrs();
-        assert_eq!(addrs[0].port(), port);
+        // Verify all fields are readable
+        let _ = &target.host;
+        let _ = target.port;
+        let _ = target.transport;
+        let _ = target.priority;
+        let _ = target.weight;
+        let _ = &target.addresses;
+
+        assert_eq!(target.host, "sip.example.com");
+        assert_eq!(target.port, 5060);
     }
-}
 
-// Test that ResolvedTarget fields are accessible
-#[test]
-fn test_resolved_target_field_access() {
-    let target = ResolvedTarget {
-        host: "sip.example.com".to_string(),
-        port: 5060,
-        transport: TransportProtocol::Tcp,
-        priority: 10,
-        weight: 100,
-        addresses: vec!["192.168.1.1".parse().unwrap()],
-    };
+    // Test resolve_uri with port but no transport uses default
+    #[tokio::test]
+    async fn test_resolve_uri_port_no_transport() {
+        let resolver = SipResolver::new().await.unwrap();
 
-    // Verify all fields are readable
-    let _ = &target.host;
-    let _ = target.port;
-    let _ = target.transport;
-    let _ = target.priority;
-    let _ = target.weight;
-    let _ = &target.addresses;
+        let targets = resolver.resolve_uri("sip:user@192.168.1.1:5070").await;
 
-    assert_eq!(target.host, "sip.example.com");
-    assert_eq!(target.port, 5060);
-}
+        assert!(targets.is_ok());
+        let targets = targets.unwrap();
+        assert_eq!(targets[0].port, 5070);
+        assert_eq!(targets[0].transport, TransportProtocol::Udp); // Default
+    }
 
-// Test resolve_uri with port but no transport uses default
-#[tokio::test]
-async fn test_resolve_uri_port_no_transport() {
-    let resolver = SipResolver::new().await.unwrap();
+    // Test ResolvedTarget clone creates independent copy
+    #[test]
+    fn test_resolved_target_clone_with_addresses() {
+        let original = ResolvedTarget {
+            host: "original.com".to_string(),
+            port: 5060,
+            transport: TransportProtocol::Udp,
+            priority: 10,
+            weight: 100,
+            addresses: vec![
+                "192.168.1.1".parse().unwrap(),
+                "192.168.1.2".parse().unwrap(),
+            ],
+        };
 
-    let targets = resolver.resolve_uri("sip:user@192.168.1.1:5070").await;
+        let cloned = original.clone();
 
-    assert!(targets.is_ok());
-    let targets = targets.unwrap();
-    assert_eq!(targets[0].port, 5070);
-    assert_eq!(targets[0].transport, TransportProtocol::Udp); // Default
-}
+        assert_eq!(cloned.addresses.len(), 2);
+        assert_eq!(cloned.addresses[0], original.addresses[0]);
+        assert_eq!(cloned.addresses[1], original.addresses[1]);
+    }
 
-// Test ResolvedTarget clone creates independent copy
-#[test]
-fn test_resolved_target_clone_with_addresses() {
-    let original = ResolvedTarget {
-        host: "original.com".to_string(),
-        port: 5060,
-        transport: TransportProtocol::Udp,
-        priority: 10,
-        weight: 100,
-        addresses: vec![
-            "192.168.1.1".parse().unwrap(),
-            "192.168.1.2".parse().unwrap(),
-        ],
-    };
+    // Test that custom resolver config works
+    #[test]
+    fn test_custom_resolver_config_creation() {
+        let config = ResolverConfig::new();
 
-    let cloned = original.clone();
+        let mut opts = ResolverOpts::default();
+        opts.timeout = std::time::Duration::from_secs(10);
+        opts.attempts = 3;
 
-    assert_eq!(cloned.addresses.len(), 2);
-    assert_eq!(cloned.addresses[0], original.addresses[0]);
-    assert_eq!(cloned.addresses[1], original.addresses[1]);
-}
+        let _resolver = SipResolver::with_config(config, opts);
+        // Just verify it doesn't panic
+    }
 
-// Test that custom resolver config works
-#[test]
-fn test_custom_resolver_config_creation() {
-    let config = ResolverConfig::new();
+    // Test resolve_uri parsing various edge cases
+    #[tokio::test]
+    async fn test_resolve_uri_parsing_variations() {
+        let resolver = SipResolver::new().await.unwrap();
 
-    let mut opts = ResolverOpts::default();
-    opts.timeout = std::time::Duration::from_secs(10);
-    opts.attempts = 3;
+        // Test various URI formats to exercise the parsing logic
+        let test_cases = vec![
+            // (URI, expected_host, expected_port, expected_transport)
+            (
+                "sip:alice@example.com:5060",
+                "example.com",
+                5060,
+                TransportProtocol::Udp,
+            ),
+            (
+                "sips:bob@example.org:5061;transport=tls",
+                "example.org",
+                5061,
+                TransportProtocol::Tls,
+            ),
+            (
+                "sip:example.net:5070;transport=tcp",
+                "example.net",
+                5070,
+                TransportProtocol::Tcp,
+            ),
+        ];
 
-    let _resolver = SipResolver::with_config(config, opts);
-    // Just verify it doesn't panic
-}
-
-// Test resolve_uri parsing various edge cases
-#[tokio::test]
-async fn test_resolve_uri_parsing_variations() {
-    let resolver = SipResolver::new().await.unwrap();
-
-    // Test various URI formats to exercise the parsing logic
-    let test_cases = vec![
-        // (URI, expected_host, expected_port, expected_transport)
-        ("sip:alice@example.com:5060", "example.com", 5060, TransportProtocol::Udp),
-        ("sips:bob@example.org:5061;transport=tls", "example.org", 5061, TransportProtocol::Tls),
-        ("sip:example.net:5070;transport=tcp", "example.net", 5070, TransportProtocol::Tcp),
-    ];
-
-    for (uri, _expected_host, _expected_port, _expected_transport) in test_cases {
-        let targets = resolver.resolve_uri(uri).await;
-        // These may fail DNS lookup, but we're testing parsing
-        if targets.is_err() {
-            // If it fails, it should be a DNS error, not a panic
-            continue;
+        for (uri, _expected_host, _expected_port, _expected_transport) in test_cases {
+            let targets = resolver.resolve_uri(uri).await;
+            // These may fail DNS lookup, but we're testing parsing
+            if targets.is_err() {
+                // If it fails, it should be a DNS error, not a panic
+                continue;
+            }
         }
     }
-}
 
-// Test that trailing dots are handled in hostnames
-#[tokio::test]
-async fn test_resolve_addresses_with_trailing_dot() {
-    let resolver = SipResolver::new().await.unwrap();
+    // Test that trailing dots are handled in hostnames
+    #[tokio::test]
+    async fn test_resolve_addresses_with_trailing_dot() {
+        let resolver = SipResolver::new().await.unwrap();
 
-    // Hickory resolver should handle trailing dots
-    let result = resolver.resolve_addresses("127.0.0.1.").await;
-    // May succeed or fail depending on resolver behavior, but shouldn't panic
-    let _ = result;
-}
+        // Hickory resolver should handle trailing dots
+        let result = resolver.resolve_addresses("127.0.0.1.").await;
+        // May succeed or fail depending on resolver behavior, but shouldn't panic
+        let _ = result;
+    }
 
-// Test resolve with different transport priorities
-#[tokio::test]
-async fn test_resolve_srv_name_generation() {
-    let resolver = SipResolver::new().await.unwrap();
+    // Test resolve with different transport priorities
+    #[tokio::test]
+    async fn test_resolve_srv_name_generation() {
+        let resolver = SipResolver::new().await.unwrap();
 
-    // Test that resolve() generates correct SRV names for different transports
-    // Using an invalid domain so it falls through to A/AAAA
-    let result = resolver.resolve("nonexistent-test-12345.invalid", None).await;
+        // Test that resolve() generates correct SRV names for different transports
+        // Using an invalid domain so it falls through to A/AAAA
+        let result = resolver
+            .resolve("nonexistent-test-12345.invalid", None)
+            .await;
 
-    // Should fail but exercise the SRV name generation code paths
-    assert!(result.is_err());
-}
+        // Should fail but exercise the SRV name generation code paths
+        assert!(result.is_err());
+    }
 
-// Test resolve with each specific transport to exercise SRV name generation
-#[tokio::test]
-async fn test_resolve_srv_names_for_each_transport() {
-    let resolver = SipResolver::new().await.unwrap();
+    // Test resolve with each specific transport to exercise SRV name generation
+    #[tokio::test]
+    async fn test_resolve_srv_names_for_each_transport() {
+        let resolver = SipResolver::new().await.unwrap();
 
-    // Test UDP - generates _sip._udp.domain
-    let _ = resolver.resolve("test-udp.invalid", Some(TransportProtocol::Udp)).await;
+        // Test UDP - generates _sip._udp.domain
+        let _ = resolver
+            .resolve("test-udp.invalid", Some(TransportProtocol::Udp))
+            .await;
 
-    // Test TCP - generates _sip._tcp.domain
-    let _ = resolver.resolve("test-tcp.invalid", Some(TransportProtocol::Tcp)).await;
+        // Test TCP - generates _sip._tcp.domain
+        let _ = resolver
+            .resolve("test-tcp.invalid", Some(TransportProtocol::Tcp))
+            .await;
 
-    // Test TLS - generates _sips._tcp.domain
-    let _ = resolver.resolve("test-tls.invalid", Some(TransportProtocol::Tls)).await;
-}
+        // Test TLS - generates _sips._tcp.domain
+        let _ = resolver
+            .resolve("test-tls.invalid", Some(TransportProtocol::Tls))
+            .await;
+    }
 
-// Test resolve_uri with @ symbol handling
-#[tokio::test]
-async fn test_resolve_uri_with_at_symbol() {
-    let resolver = SipResolver::new().await.unwrap();
+    // Test resolve_uri with @ symbol handling
+    #[tokio::test]
+    async fn test_resolve_uri_with_at_symbol() {
+        let resolver = SipResolver::new().await.unwrap();
 
-    // Multiple @ symbols should use the last one
-    let targets = resolver.resolve_uri("sip:user@domain@192.168.1.1:5060").await;
-    assert!(targets.is_ok());
-    let targets = targets.unwrap();
-    assert_eq!(targets[0].host, "192.168.1.1");
-}
+        // Multiple @ symbols should use the last one
+        let targets = resolver
+            .resolve_uri("sip:user@domain@192.168.1.1:5060")
+            .await;
+        assert!(targets.is_ok());
+        let targets = targets.unwrap();
+        assert_eq!(targets[0].host, "192.168.1.1");
+    }
 
-// Test resolve_uri with no @ symbol
-#[tokio::test]
-async fn test_resolve_uri_without_at_symbol() {
-    let resolver = SipResolver::new().await.unwrap();
+    // Test resolve_uri with no @ symbol
+    #[tokio::test]
+    async fn test_resolve_uri_without_at_symbol() {
+        let resolver = SipResolver::new().await.unwrap();
 
-    let targets = resolver.resolve_uri("sip:192.168.1.1:5060").await;
-    assert!(targets.is_ok());
-    let targets = targets.unwrap();
-    assert_eq!(targets[0].host, "192.168.1.1");
-}
+        let targets = resolver.resolve_uri("sip:192.168.1.1:5060").await;
+        assert!(targets.is_ok());
+        let targets = targets.unwrap();
+        assert_eq!(targets[0].host, "192.168.1.1");
+    }
 
-// Test the semicolon parameter parsing
-#[tokio::test]
-async fn test_resolve_uri_parameter_parsing() {
-    let resolver = SipResolver::new().await.unwrap();
+    // Test the semicolon parameter parsing
+    #[tokio::test]
+    async fn test_resolve_uri_parameter_parsing() {
+        let resolver = SipResolver::new().await.unwrap();
 
-    // No semicolon
-    let targets = resolver.resolve_uri("sip:user@192.168.1.1:5060").await;
-    assert!(targets.is_ok());
+        // No semicolon
+        let targets = resolver.resolve_uri("sip:user@192.168.1.1:5060").await;
+        assert!(targets.is_ok());
 
-    // With semicolon but no transport
-    let targets = resolver.resolve_uri("sip:user@192.168.1.1:5060;lr").await;
-    assert!(targets.is_ok());
+        // With semicolon but no transport
+        let targets = resolver.resolve_uri("sip:user@192.168.1.1:5060;lr").await;
+        assert!(targets.is_ok());
 
-    // With multiple parameters
-    let targets = resolver.resolve_uri("sip:user@192.168.1.1:5060;lr;transport=tcp;maddr=10.0.0.1").await;
-    assert!(targets.is_ok());
-    assert_eq!(targets.unwrap()[0].transport, TransportProtocol::Tcp);
-}
+        // With multiple parameters
+        let targets = resolver
+            .resolve_uri("sip:user@192.168.1.1:5060;lr;transport=tcp;maddr=10.0.0.1")
+            .await;
+        assert!(targets.is_ok());
+        assert_eq!(targets.unwrap()[0].transport, TransportProtocol::Tcp);
+    }
 
-// Test error from trait for hickory resolver errors
-#[test]
-fn test_resolver_error_from_trait() {
-    use hickory_resolver::error::{ResolveError, ResolveErrorKind};
+    // Test error from trait for hickory resolver errors
+    #[test]
+    fn test_resolver_error_from_trait() {
+        use hickory_resolver::error::{ResolveError, ResolveErrorKind};
 
-    // Create a hickory error
-    let hickory_err = ResolveError::from(
-        ResolveErrorKind::NoRecordsFound {
+        // Create a hickory error
+        let hickory_err = ResolveError::from(ResolveErrorKind::NoRecordsFound {
             query: Box::new(hickory_resolver::proto::op::Query::new()),
             soa: None,
             negative_ttl: None,
             response_code: hickory_resolver::proto::op::ResponseCode::NXDomain,
             trusted: false,
+        });
+
+        // Convert to ResolverError
+        let resolver_err: ResolverError = hickory_err.into();
+
+        // Verify it's the LookupFailed variant
+        match resolver_err {
+            ResolverError::LookupFailed(_) => (),
+            _ => panic!("Expected LookupFailed variant"),
         }
-    );
-
-    // Convert to ResolverError
-    let resolver_err: ResolverError = hickory_err.into();
-
-    // Verify it's the LookupFailed variant
-    match resolver_err {
-        ResolverError::LookupFailed(_) => (),
-        _ => panic!("Expected LookupFailed variant"),
     }
-}
 
-// Test ResolvedTarget Debug impl coverage
-#[test]
-fn test_resolved_target_debug_format() {
-    let target = ResolvedTarget {
-        host: "test.example.com".to_string(),
-        port: 5060,
-        transport: TransportProtocol::Tcp,
-        priority: 10,
-        weight: 100,
-        addresses: vec!["192.168.1.1".parse().unwrap()],
-    };
+    // Test ResolvedTarget Debug impl coverage
+    #[test]
+    fn test_resolved_target_debug_format() {
+        let target = ResolvedTarget {
+            host: "test.example.com".to_string(),
+            port: 5060,
+            transport: TransportProtocol::Tcp,
+            priority: 10,
+            weight: 100,
+            addresses: vec!["192.168.1.1".parse().unwrap()],
+        };
 
-    let debug_str = format!("{:?}", target);
-    assert!(debug_str.contains("ResolvedTarget"));
-    assert!(debug_str.contains("test.example.com"));
-}
+        let debug_str = format!("{:?}", target);
+        assert!(debug_str.contains("ResolvedTarget"));
+        assert!(debug_str.contains("test.example.com"));
+    }
 
-// Test ResolverError Debug impl coverage
-#[test]
-fn test_resolver_error_debug_format() {
-    let err = ResolverError::NoRecords("test.invalid".to_string());
-    let debug_str = format!("{:?}", err);
-    assert!(debug_str.contains("NoRecords"));
-    assert!(debug_str.contains("test.invalid"));
-}
+    // Test ResolverError Debug impl coverage
+    #[test]
+    fn test_resolver_error_debug_format() {
+        let err = ResolverError::NoRecords("test.invalid".to_string());
+        let debug_str = format!("{:?}", err);
+        assert!(debug_str.contains("NoRecords"));
+        assert!(debug_str.contains("test.invalid"));
+    }
 
-// Test Clone impl for ResolvedTarget
-#[test]
-fn test_resolved_target_clone_deep_copy() {
-    let original = ResolvedTarget {
-        host: "original.com".to_string(),
-        port: 5060,
-        transport: TransportProtocol::Udp,
-        priority: 10,
-        weight: 100,
-        addresses: vec!["192.168.1.1".parse().unwrap()],
-    };
+    // Test Clone impl for ResolvedTarget
+    #[test]
+    fn test_resolved_target_clone_deep_copy() {
+        let original = ResolvedTarget {
+            host: "original.com".to_string(),
+            port: 5060,
+            transport: TransportProtocol::Udp,
+            priority: 10,
+            weight: 100,
+            addresses: vec!["192.168.1.1".parse().unwrap()],
+        };
 
-    let mut cloned = original.clone();
-    cloned.host = "modified.com".to_string();
-    cloned.addresses.push("192.168.1.2".parse().unwrap());
+        let mut cloned = original.clone();
+        cloned.host = "modified.com".to_string();
+        cloned.addresses.push("192.168.1.2".parse().unwrap());
 
-    // Original should be unchanged
-    assert_eq!(original.host, "original.com");
-    assert_eq!(original.addresses.len(), 1);
+        // Original should be unchanged
+        assert_eq!(original.host, "original.com");
+        assert_eq!(original.addresses.len(), 1);
 
-    // Clone should have modifications
-    assert_eq!(cloned.host, "modified.com");
-    assert_eq!(cloned.addresses.len(), 2);
-}
+        // Clone should have modifications
+        assert_eq!(cloned.host, "modified.com");
+        assert_eq!(cloned.addresses.len(), 2);
+    }
+
+    // Tests for extracted internal functions
+    #[test]
+    fn test_parse_naptr_transport() {
+        assert_eq!(
+            parse_naptr_transport("SIP+D2U"),
+            Some(TransportProtocol::Udp)
+        );
+        assert_eq!(
+            parse_naptr_transport("sip+d2u"),
+            Some(TransportProtocol::Udp)
+        );
+        assert_eq!(
+            parse_naptr_transport("SIP+D2T"),
+            Some(TransportProtocol::Tcp)
+        );
+        assert_eq!(
+            parse_naptr_transport("sip+d2t"),
+            Some(TransportProtocol::Tcp)
+        );
+        assert_eq!(
+            parse_naptr_transport("SIPS+D2T"),
+            Some(TransportProtocol::Tls)
+        );
+        assert_eq!(
+            parse_naptr_transport("sips+d2t"),
+            Some(TransportProtocol::Tls)
+        );
+
+        // Invalid cases
+        assert_eq!(parse_naptr_transport("SIP+D2X"), None);
+        assert_eq!(parse_naptr_transport(""), None);
+        assert_eq!(parse_naptr_transport("unknown"), None);
+    }
+
+    #[test]
+    fn test_parse_sip_uri_internal() {
+        // Basic URI
+        let (host, port, transport) = parse_sip_uri_internal("sip:example.com");
+        assert_eq!(host, "example.com");
+        assert_eq!(port, None);
+        assert_eq!(transport, None);
+
+        // With port
+        let (host, port, transport) = parse_sip_uri_internal("sip:example.com:5060");
+        assert_eq!(host, "example.com");
+        assert_eq!(port, Some(5060));
+        assert_eq!(transport, None);
+
+        // With transport
+        let (host, port, transport) = parse_sip_uri_internal("sip:example.com;transport=tcp");
+        assert_eq!(host, "example.com");
+        assert_eq!(port, None);
+        assert_eq!(transport, Some(TransportProtocol::Tcp));
+
+        // With port and transport
+        let (host, port, transport) = parse_sip_uri_internal("sip:example.com:5060;transport=tls");
+        assert_eq!(host, "example.com");
+        assert_eq!(port, Some(5060));
+        assert_eq!(transport, Some(TransportProtocol::Tls));
+
+        // SIPS scheme
+        let (host, port, transport) = parse_sip_uri_internal("sips:example.com");
+        assert_eq!(host, "example.com");
+        assert_eq!(port, None);
+        assert_eq!(transport, None); // Transport is inferred by resolver logic later, not parser
+
+        // Invalid port
+        let (host, port, transport) = parse_sip_uri_internal("sip:example.com:invalid");
+        assert_eq!(host, "example.com");
+        assert_eq!(port, None);
+        assert_eq!(transport, None);
+
+        // Multiple parameters
+        let (host, port, transport) =
+            parse_sip_uri_internal("sip:example.com;foo=bar;transport=udp;baz");
+        assert_eq!(host, "example.com");
+        assert_eq!(port, None);
+        assert_eq!(transport, Some(TransportProtocol::Udp));
+
+        // Case insensitivity
+        let (host, port, transport) = parse_sip_uri_internal("SIP:example.com;TRANSPORT=TCP");
+        assert_eq!(host, "example.com");
+        assert_eq!(port, None);
+        assert_eq!(transport, Some(TransportProtocol::Tcp));
+
+        // IPv6
+        let (host, port, transport) = parse_sip_uri_internal("sip:[::1]:5060");
+        assert_eq!(host, "[::1]");
+        assert_eq!(port, Some(5060));
+        assert_eq!(transport, None);
+    }
 }

@@ -796,7 +796,7 @@ mod tests {
         conf.mark_silent(1);
 
         // Participant count may still show 2 but source 1 won't contribute
-        let (mix2, csrc) = conf.get_mix_for(2);
+        let (_mix2, csrc) = conf.get_mix_for(2);
         // Source 1 is silent, so mix should be zeros or very small
         assert!(!csrc.contains(&1));
     }

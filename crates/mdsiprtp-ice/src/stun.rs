@@ -795,7 +795,10 @@ mod tests {
         response.put_u8(20); // Number -> 420
 
         let result = parse_binding_response(&response, &txn_id);
-        assert!(matches!(result, Err(StunError::ErrorResponse { code: 420, .. })));
+        assert!(matches!(
+            result,
+            Err(StunError::ErrorResponse { code: 420, .. })
+        ));
     }
 
     #[test]
@@ -852,7 +855,7 @@ mod tests {
         attrs.put_u16(10); // Claim 10 bytes but provide less
         attrs.put_u16(0); // Reserved
         attrs.put_u8(5); // Class
-        // Missing rest of data
+                         // Missing rest of data
 
         let err = parse_error_response(&attrs);
         match err {

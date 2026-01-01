@@ -1578,7 +1578,7 @@ mod tests {
 
     #[test]
     fn test_receiver_report_too_short_payload() {
-        let mut data = vec![0x80, 201, 0, 0]; // RR header with 0 length
+        let data = vec![0x80, 201, 0, 0]; // RR header with 0 length
         let result = ReceiverReport::parse(&data);
         assert!(matches!(result, Err(RtcpParseError::TooShort(_))));
     }

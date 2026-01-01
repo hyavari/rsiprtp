@@ -2440,10 +2440,7 @@ Content-Length: 0\r\n\
     #[test]
     fn test_build_response_empty_via() {
         // Test builder with no request (empty via list)
-        let resp = SipResponse::builder()
-            .status(200, "OK")
-            .build()
-            .unwrap();
+        let resp = SipResponse::builder().status(200, "OK").build().unwrap();
 
         let vias = resp.via_headers_raw();
         assert!(vias.is_empty());

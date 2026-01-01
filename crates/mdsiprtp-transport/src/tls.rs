@@ -1649,7 +1649,10 @@ mod tests {
             let conn = TlsConnectionState::new(TlsConnection::Server(tls_stream), remote_addr);
             let conn_arc = Arc::new(Mutex::new(conn));
             let connections = Arc::new(RwLock::new(HashMap::new()));
-            connections.write().await.insert(remote_addr, conn_arc.clone());
+            connections
+                .write()
+                .await
+                .insert(remote_addr, conn_arc.clone());
 
             // Start read loop - it should exit when connection closes
             TlsTransport::read_loop(conn_arc, remote_addr, tx, connections).await;
@@ -1668,23 +1671,20 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
         // Shouldn't receive any messages (connection closed immediately)
-        let result = tokio::time::timeout(
-            std::time::Duration::from_millis(500),
-            rx.recv()
-        ).await;
+        let result = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await;
 
         // Either timeout or None is acceptable
         match result {
-            Ok(None) => {}, // Channel closed
-            Err(_) => {},   // Timeout
-            Ok(Some(_)) => {}, // Might get a message before close
+            Ok(None) => {}    // Channel closed
+            Err(_) => {}      // Timeout
+            Ok(Some(_)) => {} // Might get a message before close
         }
 
         // Use timeout to prevent test from hanging
-        tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            server_handle
-        ).await.expect("server should exit within 5s").unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), server_handle)
+            .await
+            .expect("server should exit within 5s")
+            .unwrap();
     }
 
     #[tokio::test]
@@ -1709,7 +1709,10 @@ mod tests {
             let conn = TlsConnectionState::new(TlsConnection::Server(tls_stream), remote_addr);
             let conn_arc = Arc::new(Mutex::new(conn));
             let connections = Arc::new(RwLock::new(HashMap::new()));
-            connections.write().await.insert(remote_addr, conn_arc.clone());
+            connections
+                .write()
+                .await
+                .insert(remote_addr, conn_arc.clone());
 
             // Drop receiver before starting read loop
             drop(rx);
@@ -1802,7 +1805,10 @@ mod tests {
             let mut tls_stream = acceptor.accept(stream).await.unwrap();
 
             // Send only part of headers
-            tls_stream.write_all(b"SIP/2.0 200 OK\r\nCont").await.unwrap();
+            tls_stream
+                .write_all(b"SIP/2.0 200 OK\r\nCont")
+                .await
+                .unwrap();
             tls_stream.flush().await.unwrap();
             // Close without sending complete message
         });
@@ -1819,8 +1825,8 @@ mod tests {
         // Should get None (connection closed with incomplete data) or an error
         let result = state.read_message().await;
         match result {
-            Ok(None) => {}, // Expected: connection closed with incomplete data
-            Err(_) => {},   // Also acceptable: error due to unexpected closure
+            Ok(None) => {} // Expected: connection closed with incomplete data
+            Err(_) => {}   // Also acceptable: error due to unexpected closure
             Ok(Some(_)) => panic!("Should not receive a complete message"),
         }
 
@@ -1846,10 +1852,7 @@ mod tests {
             let (stream, remote_addr) = listener.accept().await.unwrap();
             let tls_stream = acceptor.accept(stream).await.unwrap();
 
-            let mut state = TlsConnectionState::new(
-                TlsConnection::Server(tls_stream),
-                remote_addr,
-            );
+            let mut state = TlsConnectionState::new(TlsConnection::Server(tls_stream), remote_addr);
 
             // Write message using TlsConnectionState
             state.write_message(msg_to_send).await.unwrap();
@@ -1995,5 +1998,24 @@ mod tests {
         assert_eq!(&buf[..total], b"PART1PART2");
 
         server_handle.await.unwrap();
+    }
+
+    #[test]
+    fn test_load_private_key_invalid_content() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // Create file with only a certificate, no key
+        let (cert_pem, _) = generate_test_certs();
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(&cert_pem).unwrap();
+        file.flush().unwrap();
+
+        let result = load_private_key(file.path());
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("No private key found"));
     }
 }

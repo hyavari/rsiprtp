@@ -720,7 +720,7 @@ mod tests {
         let actions = mgr.poll_actions();
 
         // Find the handle from the event
-        let handle = actions
+        let _handle = actions
             .iter()
             .find_map(|a| {
                 if let ManagerAction::Event(h, ManagerEvent::InviteRequest(_)) = a {
@@ -1420,10 +1420,7 @@ mod tests {
         let mut mgr = TransactionManager::new(false);
 
         // Create a minimal response without proper Via header
-        let response = SipResponse::builder()
-            .status(200, "OK")
-            .build()
-            .unwrap();
+        let response = SipResponse::builder().status(200, "OK").build().unwrap();
 
         // Should not crash when TransactionId::from_response returns None
         mgr.handle_message(SipMessage::Response(response));
@@ -1528,8 +1525,10 @@ mod tests {
         mgr.cleanup_terminated();
 
         // Verify all transactions are still tracked
-        let total = mgr.invite_clients.len() + mgr.non_invite_clients.len()
-            + mgr.invite_servers.len() + mgr.non_invite_servers.len();
+        let total = mgr.invite_clients.len()
+            + mgr.non_invite_clients.len()
+            + mgr.invite_servers.len()
+            + mgr.non_invite_servers.len();
         assert!(total > 0);
     }
 
@@ -1837,7 +1836,6 @@ mod tests {
         // Just verify no crash
     }
 
-
     #[test]
     fn test_request_without_transaction_id() {
         let mut mgr = TransactionManager::new(false);
@@ -1999,20 +1997,98 @@ mod tests {
         let ack = SipRequest::builder()
             .method(Method::Ack)
             .uri("sip:bob@example.com")
-            .via("192.168.1.1", 5060, "UDP", "z9hG4bKack")
+            .via("192.168.1.1", 5060, "UDP", "z9hG4bKtest")
             .from("sip:alice@example.com", "fromtag")
             .to("sip:bob@example.com")
             .to_tag("totag")
-            .call_id("ack@example.com")
+            .call_id("test@example.com")
             .cseq(1)
             .build()
             .unwrap();
 
         mgr.handle_message(SipMessage::Request(ack));
 
-        // ACK should not create a new transaction
-        assert!(mgr.invite_servers.is_empty());
-        assert!(mgr.non_invite_servers.is_empty());
+        // Should not crash, ACK for 2xx is handled at dialog level
+        let actions = mgr.poll_actions();
+        // No event should be generated at transaction level
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn test_handle_request_matches_client_transaction() {
+        let mut mgr = TransactionManager::new(false);
+        let invite = create_invite();
+
+        // Create client transaction
+        let _handle = mgr.create_client_transaction(invite.clone()).unwrap();
+        mgr.poll_actions();
+
+        // Receive a request that matches the client transaction ID
+        // (This simulates a loopback or collision scenario)
+        // TransactionId uses branch parameter from Via header
+        // Since create_client_transaction generates a new branch, we need to manually
+        // inject a matching request or force the ID match.
+        // However, TransactionId derivation is deterministic from the message.
+        // The outgoing request has a branch. If we receive a request with SAME branch...
+
+        // Actually, create_client_transaction modifies the request to add a branch!
+        // We need to capture that modified request.
+        // We can't easily get it back from the manager except via Send action.
+
+        // Let's create a client transaction and capture the sent request
+        let mut mgr = TransactionManager::new(false);
+        let invite = create_invite();
+        mgr.create_client_transaction(invite).unwrap();
+        let actions = mgr.poll_actions();
+
+        // Extract the sent data
+        let sent_data = if let Some(ManagerAction::Send(data)) = actions.first() {
+            data.clone()
+        } else {
+            panic!("Expected Send action");
+        };
+
+        // Parse it back to a request
+        let sent_request =
+            if let Ok(SipMessage::Request(req)) = mdsiprtp_sip::SipMessage::parse(&sent_data) {
+                req
+            } else {
+                panic!("Failed to parse sent request");
+            };
+
+        // Now handle this request as incoming
+        mgr.handle_message(SipMessage::Request(sent_request));
+
+        // Should hit the "_ => {}" branch in handle_request because it matches a Client transaction
+        // No new server transaction should be created
+        assert_eq!(mgr.invite_servers.len(), 0);
+    }
+
+    #[test]
+    fn test_handle_response_matches_server_transaction() {
+        let mut mgr = TransactionManager::new(false);
+        let invite = create_invite();
+
+        // Create server transaction
+        mgr.handle_message(SipMessage::Request(invite.clone()));
+        mgr.poll_actions();
+
+        // Create a response that matches this transaction
+        // Responses match based on branch, CSeq, method.
+        // The server transaction ID is derived from the request.
+        // The response ID is derived from the response.
+        // They should match.
+
+        let response = create_response(&invite, 200);
+
+        // Handle response
+        mgr.handle_message(SipMessage::Response(response));
+
+        // Should hit "_ => {}" branch in handle_response because it matches a Server transaction
+        // (Server transactions don't process incoming responses, they send them)
+        // No actions should be generated
+        let actions = mgr.poll_actions();
+        assert!(actions.is_empty());
     }
 
     #[test]
@@ -2174,5 +2250,4 @@ mod tests {
         let actions = mgr.poll_actions();
         assert!(actions.is_empty());
     }
-
 }

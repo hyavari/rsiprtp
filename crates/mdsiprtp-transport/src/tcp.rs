@@ -961,9 +961,11 @@ mod tests {
         stream.flush().await.unwrap();
 
         // Should not receive message yet (incomplete)
-        let result =
-            tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await;
-        assert!(result.is_err(), "Should timeout waiting for complete message");
+        let result = tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await;
+        assert!(
+            result.is_err(),
+            "Should timeout waiting for complete message"
+        );
 
         // Now send remaining 50 bytes
         stream.write_all(&vec![b'B'; 50]).await.unwrap();
@@ -1222,7 +1224,8 @@ mod tests {
     #[test]
     fn test_parse_content_length_overflow() {
         // Test parsing extremely large number
-        let headers = b"INVITE sip:test SIP/2.0\r\nContent-Length: 999999999999999999999999\r\n\r\n";
+        let headers =
+            b"INVITE sip:test SIP/2.0\r\nContent-Length: 999999999999999999999999\r\n\r\n";
         // Overflow will fail parsing, returning 0
         assert_eq!(parse_content_length(headers), 0);
     }
@@ -1253,7 +1256,8 @@ mod tests {
         let client = TcpTransport::bind(client_addr).await.unwrap();
 
         // Use OutgoingMessage directly
-        let data = Bytes::from_static(b"INVITE sip:test@example.com SIP/2.0\r\nContent-Length: 0\r\n\r\n");
+        let data =
+            Bytes::from_static(b"INVITE sip:test@example.com SIP/2.0\r\nContent-Length: 0\r\n\r\n");
         let msg = OutgoingMessage::new(data.clone(), server_addr);
 
         client.send(msg).await.unwrap();
@@ -1392,7 +1396,11 @@ mod tests {
                 .unwrap()
                 .unwrap();
 
-            if received.data.windows(7).any(|w| w == b"client1" || w == b"client2") {
+            if received
+                .data
+                .windows(7)
+                .any(|w| w == b"client1" || w == b"client2")
+            {
                 received_count += 1;
             }
         }
@@ -1448,7 +1456,8 @@ mod tests {
         let messages = vec![
             b"INVITE sip:test1@example.com SIP/2.0\r\nContent-Length: 0\r\n\r\n".to_vec(),
             b"INVITE sip:test2@example.com SIP/2.0\r\nContent-Length: 5\r\n\r\nHELLO".to_vec(),
-            b"INVITE sip:test3@example.com SIP/2.0\r\nContent-Length: 10\r\n\r\nHELLOWORLD".to_vec(),
+            b"INVITE sip:test3@example.com SIP/2.0\r\nContent-Length: 10\r\n\r\nHELLOWORLD"
+                .to_vec(),
         ];
 
         for msg in &messages {
