@@ -40,10 +40,11 @@ impl Via {
 
         // Parse protocol (e.g., "SIP/2.0/UDP")
         let protocol_parts: Vec<&str> = parts[0].split('/').collect();
-        let protocol = protocol_parts
-            .last()
-            .ok_or_else(|| SipError::Parse("Missing transport protocol".to_string()))?
-            .to_string();
+        let protocol = protocol_parts.last().unwrap_or(&"");
+        if protocol.is_empty() {
+            return Err(SipError::Parse("Missing transport protocol".to_string()));
+        }
+        let protocol = protocol.to_string();
 
         // Parse host:port and parameters
         let rest = parts[1];
@@ -482,6 +483,19 @@ mod tests {
     }
 
     #[test]
+    fn test_via_parse_ipv6_with_port() {
+        let via = Via::parse("SIP/2.0/UDP [2001:db8::1]:5060;branch=z9hG4bK123").unwrap();
+        assert_eq!(via.host, "[2001:db8::1]:5060");
+        assert_eq!(via.port, 5060);
+    }
+
+    #[test]
+    fn test_via_parse_rport_without_value() {
+        let via = Via::parse("SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bK776;rport").unwrap();
+        assert!(via.rport.is_none());
+    }
+
+    #[test]
     fn test_via_parse_tls() {
         let via = Via::parse("SIP/2.0/TLS secure.example.com:5061;branch=z9hG4bKsecure").unwrap();
         assert_eq!(via.protocol, "TLS");
@@ -497,8 +511,27 @@ mod tests {
     }
 
     #[test]
+    fn test_via_parse_missing_protocol() {
+        let result = Via::parse("SIP/2.0/ 192.168.1.1:5060;branch=z9hG4bK123");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_via_parse_non_numeric_port() {
+        let via = Via::parse("SIP/2.0/UDP proxy.example.com:abc;branch=z9hG4bK123").unwrap();
+        assert_eq!(via.host, "proxy.example.com:abc");
+        assert_eq!(via.port, 5060);
+    }
+
+    #[test]
     fn test_via_parse_rport_no_value() {
         let via = Via::parse("SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bK776;rport").unwrap();
+        assert!(via.rport.is_none());
+    }
+
+    #[test]
+    fn test_via_parse_unknown_param_without_value() {
+        let via = Via::parse("SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bK776;foo").unwrap();
         assert!(via.rport.is_none());
     }
 
@@ -582,6 +615,12 @@ mod tests {
         let contact = Contact::parse("\"Alice\" <sip:alice@example.com>;expires=3600").unwrap();
         assert_eq!(contact.display_name, Some("Alice".to_string()));
         assert_eq!(contact.expires, Some(3600));
+    }
+
+    #[test]
+    fn test_contact_parse_missing_end_quote() {
+        let result = Contact::parse("\"Alice <sip:alice@example.com>");
+        assert!(result.is_err());
     }
 
     #[test]
@@ -699,6 +738,12 @@ mod tests {
     }
 
     #[test]
+    fn test_record_route_parse_invalid_uri() {
+        let result = RecordRoute::parse("<sip:proxy@[::1>");
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_record_route_parse_all() {
         let values = vec![
             "<sip:p1.example.com>;lr, <sip:p2.example.com>;lr".to_string(),
@@ -706,6 +751,13 @@ mod tests {
         ];
         let routes = RecordRoute::parse_all(&values);
         assert_eq!(routes.len(), 3);
+    }
+
+    #[test]
+    fn test_record_route_parse_all_ignores_invalid() {
+        let values = vec!["<sip:proxy.example.com>;lr, invalid".to_string()];
+        let routes = RecordRoute::parse_all(&values);
+        assert_eq!(routes.len(), 1);
     }
 
     #[test]
@@ -770,10 +822,23 @@ mod tests {
     }
 
     #[test]
+    fn test_route_parse_invalid_uri() {
+        let result = Route::parse("<sip:proxy@[::1>");
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_route_parse_all() {
         let values = vec!["<sip:p1.example.com>;lr, <sip:p2.example.com>;lr".to_string()];
         let routes = Route::parse_all(&values);
         assert_eq!(routes.len(), 2);
+    }
+
+    #[test]
+    fn test_route_parse_all_ignores_invalid() {
+        let values = vec!["<sip:p1.example.com>;lr, invalid".to_string()];
+        let routes = Route::parse_all(&values);
+        assert_eq!(routes.len(), 1);
     }
 
     #[test]

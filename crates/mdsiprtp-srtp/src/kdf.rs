@@ -141,7 +141,7 @@ impl SessionKeys {
             Label::SrtpEncryption,
             0,
             suite.session_key_len(),
-        )?;
+        );
 
         let srtp_auth_key = derive_key(
             master_key,
@@ -149,7 +149,7 @@ impl SessionKeys {
             Label::SrtpAuthentication,
             0,
             suite.session_auth_key_len(),
-        )?;
+        );
 
         let srtp_salt = derive_key(
             master_key,
@@ -157,7 +157,7 @@ impl SessionKeys {
             Label::SrtpSalt,
             0,
             suite.session_salt_len(),
-        )?;
+        );
 
         let srtcp_enc_key = derive_key(
             master_key,
@@ -165,7 +165,7 @@ impl SessionKeys {
             Label::SrtcpEncryption,
             0,
             suite.session_key_len(),
-        )?;
+        );
 
         let srtcp_auth_key = derive_key(
             master_key,
@@ -173,7 +173,7 @@ impl SessionKeys {
             Label::SrtcpAuthentication,
             0,
             suite.session_auth_key_len(),
-        )?;
+        );
 
         let srtcp_salt = derive_key(
             master_key,
@@ -181,7 +181,7 @@ impl SessionKeys {
             Label::SrtcpSalt,
             0,
             suite.session_salt_len(),
-        )?;
+        );
 
         Ok(Self {
             srtp_enc_key,
@@ -203,7 +203,7 @@ fn derive_key(
     label: Label,
     index: u64,
     len: usize,
-) -> Result<Vec<u8>, String> {
+) -> Vec<u8> {
     // Build the 128-bit "x" value: salt XOR (label || r)
     // Where r is the key_derivation_rate (0 for our use case, meaning use index 0)
     let mut x = [0u8; 16];
@@ -231,7 +231,7 @@ fn derive_key(
 
     // Return only the requested length
     key_stream.truncate(len);
-    Ok(key_stream)
+    key_stream
 }
 
 #[cfg(test)]

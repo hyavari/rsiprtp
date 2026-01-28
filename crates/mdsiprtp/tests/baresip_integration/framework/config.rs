@@ -1,6 +1,6 @@
 //! Test configuration for integration tests.
 
-use std::net::{SocketAddr, TcpListener, UdpSocket};
+use std::net::{SocketAddr, UdpSocket};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -166,12 +166,12 @@ ctrl_tcp_listen    127.0.0.1:{}
     }
 }
 
-/// Find an available TCP/UDP port.
+/// Find an available UDP port.
 fn find_available_port() -> u16 {
-    // Bind to port 0 to get an available port from the OS
-    let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind to any port");
-    let port = listener.local_addr().unwrap().port();
-    drop(listener);
+    // Bind to port 0 to get an available UDP port from the OS.
+    let socket = UdpSocket::bind("127.0.0.1:0").expect("Failed to bind UDP socket");
+    let port = socket.local_addr().unwrap().port();
+    drop(socket);
     port
 }
 

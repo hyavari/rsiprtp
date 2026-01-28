@@ -13,5 +13,6 @@ thiserror.workspace = true
 bytes.workspace = true
 uuid.workspace = true
 md5.workspace = true
+sha2.workspace = true
 hex.workspace = true
 rand.workspace = true

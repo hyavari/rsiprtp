@@ -21,11 +21,88 @@ use tracing::{debug, error, trace, warn};
 
 use crate::traits::{IncomingMessage, OutgoingMessage, TransportProtocol};
 
+#[cfg(test)]
+use std::sync::atomic::{AtomicU8, Ordering};
+
 /// Maximum SIP message size over TLS.
 pub const MAX_TLS_SIZE: usize = 65536;
 
 /// Initial buffer size for reading.
 const INITIAL_BUF_SIZE: usize = 4096;
+
+#[cfg(test)]
+static FORCE_ACCEPT_ERROR: AtomicU8 = AtomicU8::new(0);
+#[cfg(test)]
+static FORCE_WRITE_ERROR: AtomicU8 = AtomicU8::new(0);
+#[cfg(test)]
+static FORCE_FLUSH_ERROR: AtomicU8 = AtomicU8::new(0);
+#[cfg(test)]
+static FORCE_BIND_ERROR: AtomicU8 = AtomicU8::new(0);
+#[cfg(test)]
+static FORCE_LOCAL_ADDR_ERROR: AtomicU8 = AtomicU8::new(0);
+
+#[cfg(test)]
+fn force_accept_error_once() {
+    FORCE_ACCEPT_ERROR.store(1, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn force_accept_error_other_message_once() {
+    FORCE_ACCEPT_ERROR.store(2, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn force_accept_error_other_kind_once() {
+    FORCE_ACCEPT_ERROR.store(3, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn force_write_error_once() {
+    FORCE_WRITE_ERROR.store(1, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn force_flush_error_once() {
+    FORCE_FLUSH_ERROR.store(1, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn force_bind_error_once() {
+    FORCE_BIND_ERROR.store(1, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn force_local_addr_error_once() {
+    FORCE_LOCAL_ADDR_ERROR.store(1, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn take_forced_accept_error() -> Option<std::io::Error> {
+    match FORCE_ACCEPT_ERROR.swap(0, Ordering::SeqCst) {
+        1 => Some(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "forced accept error",
+        )),
+        2 => Some(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "forced accept error other",
+        )),
+        3 => Some(std::io::Error::new(
+            std::io::ErrorKind::ConnectionAborted,
+            "forced accept error",
+        )),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+fn take_forced_error(flag: &AtomicU8, message: &str) -> Option<std::io::Error> {
+    if flag.swap(0, Ordering::SeqCst) == 1 {
+        Some(std::io::Error::new(std::io::ErrorKind::Other, message))
+    } else {
+        None
+    }
+}
 
 /// TLS connection wrapper for both client and server connections.
 enum TlsConnection {
@@ -42,6 +119,10 @@ impl TlsConnection {
     }
 
     async fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        #[cfg(test)]
+        if let Some(err) = take_forced_error(&FORCE_WRITE_ERROR, "forced write error") {
+            return Err(err);
+        }
         match self {
             TlsConnection::Client(stream) => stream.write_all(buf).await,
             TlsConnection::Server(stream) => stream.write_all(buf).await,
@@ -49,6 +130,10 @@ impl TlsConnection {
     }
 
     async fn flush(&mut self) -> std::io::Result<()> {
+        #[cfg(test)]
+        if let Some(err) = take_forced_error(&FORCE_FLUSH_ERROR, "forced flush error") {
+            return Err(err);
+        }
         match self {
             TlsConnection::Client(stream) => stream.flush().await,
             TlsConnection::Server(stream) => stream.flush().await,
@@ -82,7 +167,7 @@ impl TlsConnectionState {
     async fn read_message(&mut self) -> Result<Option<Bytes>> {
         loop {
             // Try to parse a complete message from the buffer
-            if let Some(msg) = self.try_parse_message()? {
+            if let Some(msg) = self.try_parse_message() {
                 return Ok(Some(msg));
             }
 
@@ -113,17 +198,10 @@ impl TlsConnectionState {
     }
 
     /// Try to parse a complete SIP message from the buffer.
-    fn try_parse_message(&mut self) -> Result<Option<Bytes>> {
+    fn try_parse_message(&mut self) -> Option<Bytes> {
         // Look for end of headers (double CRLF)
         let data = &self.read_buf[..];
-        let header_end = find_header_end(data);
-
-        if header_end.is_none() {
-            // Haven't received complete headers yet
-            return Ok(None);
-        }
-
-        let header_end = header_end.unwrap();
+        let header_end = find_header_end(data)?;
 
         // Parse Content-Length from headers
         let headers = &data[..header_end];
@@ -133,12 +211,12 @@ impl TlsConnectionState {
 
         if data.len() < total_length {
             // Haven't received complete body yet
-            return Ok(None);
+            return None;
         }
 
         // Extract complete message
         let msg = self.read_buf.split_to(total_length).freeze();
-        Ok(Some(msg))
+        Some(msg)
     }
 
     /// Write a message to the connection.
@@ -147,6 +225,22 @@ impl TlsConnectionState {
         self.stream.flush().await?;
         Ok(())
     }
+}
+
+async fn bind_listener(addr: SocketAddr) -> std::io::Result<TcpListener> {
+    #[cfg(test)]
+    if let Some(err) = take_forced_error(&FORCE_BIND_ERROR, "forced bind error") {
+        return Err(err);
+    }
+    TcpListener::bind(addr).await
+}
+
+fn listener_local_addr(listener: &TcpListener) -> std::io::Result<SocketAddr> {
+    #[cfg(test)]
+    if let Some(err) = take_forced_error(&FORCE_LOCAL_ADDR_ERROR, "forced local_addr error") {
+        return Err(err);
+    }
+    listener.local_addr()
 }
 
 /// Find the end of SIP headers (double CRLF).
@@ -169,10 +263,9 @@ fn parse_content_length(headers: &[u8]) -> usize {
     for line in headers_str.lines() {
         let line_lower = line.to_lowercase();
         if line_lower.starts_with("content-length:") || line_lower.starts_with("l:") {
-            if let Some(value) = line.split(':').nth(1) {
-                if let Ok(len) = value.trim().parse() {
-                    return len;
-                }
+            let value = line.split_once(':').map(|(_, value)| value).unwrap_or("");
+            if let Ok(len) = value.trim().parse() {
+                return len;
             }
         }
     }
@@ -261,8 +354,8 @@ impl TlsTransport {
             .map_err(|e| mdsiprtp_core::TransportError::TlsError(e.to_string()))?;
 
         let acceptor = TlsAcceptor::from(Arc::new(server_config));
-        let listener = TcpListener::bind(addr).await?;
-        let local_addr = listener.local_addr()?;
+        let listener = bind_listener(addr).await?;
+        let local_addr = listener_local_addr(&listener)?;
         debug!("TLS server transport bound to {}", local_addr);
 
         Ok(Self {
@@ -365,16 +458,13 @@ impl TlsTransport {
         let conn_arc = {
             let connections = self.connections.read().await;
             connections.get(&dest).cloned()
-        };
-
-        if let Some(conn_arc) = conn_arc {
-            let mut conn = conn_arc.lock().await;
-            trace!("Sending {} bytes to {} over TLS", msg.data.len(), dest);
-            conn.write_message(&msg.data).await?;
-            Ok(())
-        } else {
-            Err(mdsiprtp_core::TransportError::ConnectionClosed.into())
         }
+        .ok_or(mdsiprtp_core::TransportError::ConnectionClosed)?;
+
+        let mut conn = conn_arc.lock().await;
+        trace!("Sending {} bytes to {} over TLS", msg.data.len(), dest);
+        conn.write_message(&msg.data).await?;
+        Ok(())
     }
 
     /// Send raw bytes to a destination.
@@ -401,7 +491,18 @@ impl TlsTransport {
 
             tokio::spawn(async move {
                 loop {
-                    match listener.accept().await {
+                    let accept_result = async {
+                        #[cfg(test)]
+                        {
+                            if let Some(err) = take_forced_accept_error() {
+                                return Err(err);
+                            }
+                        }
+                        listener.accept().await
+                    }
+                    .await;
+
+                    match accept_result {
                         Ok((tcp_stream, remote_addr)) => {
                             debug!(
                                 "Accepted TCP connection from {}, starting TLS handshake",
@@ -439,6 +540,12 @@ impl TlsTransport {
                         }
                         Err(e) => {
                             error!("TLS accept error: {}", e);
+                            #[cfg(test)]
+                            if e.kind() == std::io::ErrorKind::Other
+                                && e.to_string() == "forced accept error"
+                            {
+                                break;
+                            }
                         }
                     }
                 }
@@ -455,9 +562,7 @@ impl TlsTransport {
                 let addr = *addr;
                 let conn_arc = conn_arc.clone();
                 let conns = connections_clone.clone();
-                tokio::spawn(async move {
-                    Self::read_loop(conn_arc, addr, tx, conns).await;
-                });
+                tokio::spawn(Self::read_loop(conn_arc, addr, tx, conns));
             }
         });
 
@@ -538,16 +643,13 @@ impl TlsSender {
         let conn_arc = {
             let connections = self.connections.read().await;
             connections.get(&dest).cloned()
-        };
-
-        if let Some(conn_arc) = conn_arc {
-            let mut conn = conn_arc.lock().await;
-            trace!("Sending {} bytes to {} over TLS", msg.data.len(), dest);
-            conn.write_message(&msg.data).await?;
-            Ok(())
-        } else {
-            Err(mdsiprtp_core::TransportError::ConnectionClosed.into())
         }
+        .ok_or(mdsiprtp_core::TransportError::ConnectionClosed)?;
+
+        let mut conn = conn_arc.lock().await;
+        trace!("Sending {} bytes to {} over TLS", msg.data.len(), dest);
+        conn.write_message(&msg.data).await?;
+        Ok(())
     }
 
     /// Send raw bytes to a destination.
@@ -610,17 +712,119 @@ impl rustls::client::danger::ServerCertVerifier for NoCertificateVerification {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rustls::client::danger::ServerCertVerifier;
-    use std::net::{IpAddr, Ipv4Addr};
     use std::sync::Once;
 
-    static INIT: Once = Once::new();
+    fn init_tracing() {
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            let _ = tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::TRACE)
+                .with_test_writer()
+                .try_init();
+        });
+    }
+    use rustls::client::danger::ServerCertVerifier;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    static CRYPTO_INIT: Once = Once::new();
+    const PKCS1_KEY_PEM: &str = "-----BEGIN RSA PRIVATE KEY-----\n\
+***REDACTED***\n\
+***REDACTED***\n\
+***REDACTED***\n\
+***REDACTED***\n\
+***REDACTED***\n\
+***REDACTED***\n\
+***REDACTED***\n\
+***REDACTED***\n\
+***REDACTED***\n\
+***REDACTED***\n\
+***REDACTED***\n\
+***REDACTED***\n\
+***REDACTED***\n\
+-----END RSA PRIVATE KEY-----\n";
+    const SEC1_KEY_PEM: &str = "-----BEGIN EC PRIVATE KEY-----\n\
+***REDACTED***\n\
+***REDACTED***\n\
+***REDACTED***\n\
+-----END EC PRIVATE KEY-----\n";
 
     /// Install the ring crypto provider for tests.
     fn init_crypto_provider() {
-        INIT.call_once(|| {
+        CRYPTO_INIT.call_once(|| {
             let _ = rustls::crypto::ring::default_provider().install_default();
         });
+    }
+
+    fn assert_not_ok_and_empty(ok: bool, empty: bool) {
+        assert!(!(ok & empty));
+    }
+
+    async fn bind_test_tls_server() -> TlsTransport {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let (cert_pem, key_pem) = generate_test_certs();
+
+        let mut cert_file = NamedTempFile::new().unwrap();
+        cert_file.write_all(&cert_pem).unwrap();
+        cert_file.flush().unwrap();
+
+        let mut key_file = NamedTempFile::new().unwrap();
+        key_file.write_all(&key_pem).unwrap();
+        key_file.flush().unwrap();
+
+        let config = TlsServerConfig {
+            cert_path: cert_file.path().to_str().unwrap().to_string(),
+            key_path: key_file.path().to_str().unwrap().to_string(),
+        };
+
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        TlsTransport::bind_server(addr, config).await.unwrap()
+    }
+
+    async fn setup_tls_client_server() -> (mpsc::Receiver<IncomingMessage>, TlsTransport, SocketAddr)
+    {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        init_crypto_provider();
+        let (cert_pem, key_pem) = generate_test_certs();
+
+        let mut cert_file = NamedTempFile::new().unwrap();
+        cert_file.write_all(&cert_pem).unwrap();
+        cert_file.flush().unwrap();
+
+        let mut key_file = NamedTempFile::new().unwrap();
+        key_file.write_all(&key_pem).unwrap();
+        key_file.flush().unwrap();
+
+        let server_config = TlsServerConfig {
+            cert_path: cert_file.path().to_str().unwrap().to_string(),
+            key_path: key_file.path().to_str().unwrap().to_string(),
+        };
+
+        let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let server = TlsTransport::bind_server(server_addr, server_config)
+            .await
+            .unwrap();
+        let server_addr = server.local_addr();
+        let (server_rx, _sender) = server.start();
+
+        let client_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let client_config = TlsClientConfig {
+            verify_server: false,
+            ca_cert_path: None,
+        };
+        let client = TlsTransport::new_client(client_addr, client_config).unwrap();
+        client.connect(server_addr, "localhost").await.unwrap();
+
+        (server_rx, client, server_addr)
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_assert_not_ok_and_empty_panics_when_ok_and_empty() {
+        assert_not_ok_and_empty(true, true);
     }
 
     // find_header_end tests
@@ -766,6 +970,26 @@ mod tests {
     }
 
     #[test]
+    fn test_tls_client_config_ca_path_loads() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        init_crypto_provider();
+        let (cert_pem, _) = generate_test_certs();
+        let mut cert_file = NamedTempFile::new().unwrap();
+        cert_file.write_all(&cert_pem).unwrap();
+        cert_file.flush().unwrap();
+
+        let config = TlsClientConfig {
+            verify_server: true,
+            ca_cert_path: Some(cert_file.path().to_str().unwrap().to_string()),
+        };
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let transport = TlsTransport::new_client(addr, config).unwrap();
+        assert_eq!(transport.local_addr(), addr);
+    }
+
+    #[test]
     fn test_tls_client_config_no_verify() {
         let config = TlsClientConfig {
             verify_server: false,
@@ -890,6 +1114,32 @@ mod tests {
         assert!(result.is_err()); // Connection refused or timeout
     }
 
+    #[tokio::test]
+    async fn test_connect_missing_connector_on_server_transport() {
+        init_crypto_provider();
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let (cert_pem, key_pem) = generate_test_certs();
+        let mut cert_file = NamedTempFile::new().unwrap();
+        cert_file.write_all(&cert_pem).unwrap();
+        cert_file.flush().unwrap();
+
+        let mut key_file = NamedTempFile::new().unwrap();
+        key_file.write_all(&key_pem).unwrap();
+        key_file.flush().unwrap();
+
+        let config = TlsServerConfig {
+            cert_path: cert_file.path().to_str().unwrap().to_string(),
+            key_path: key_file.path().to_str().unwrap().to_string(),
+        };
+
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let server = TlsTransport::bind_server(addr, config).await.unwrap();
+        let result = server.connect(server.local_addr(), "localhost").await;
+        assert!(result.is_err());
+    }
+
     // MAX_TLS_SIZE constant test
     #[test]
     fn test_max_tls_size() {
@@ -957,6 +1207,95 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[test]
+    fn test_load_private_key_pkcs1() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut key_file = NamedTempFile::new().unwrap();
+        key_file.write_all(PKCS1_KEY_PEM.as_bytes()).unwrap();
+        key_file.flush().unwrap();
+
+        let key = load_private_key(key_file.path()).unwrap();
+        assert!(format!("{key:?}").contains("Pkcs1"));
+    }
+
+    #[test]
+    fn test_load_private_key_sec1() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut key_file = NamedTempFile::new().unwrap();
+        key_file.write_all(SEC1_KEY_PEM.as_bytes()).unwrap();
+        key_file.flush().unwrap();
+
+        let key = load_private_key(key_file.path()).unwrap();
+        assert!(format!("{key:?}").contains("Sec1"));
+    }
+
+    #[test]
+    fn test_load_private_key_invalid_pem() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut key_file = NamedTempFile::new().unwrap();
+        key_file
+            .write_all(
+                b"-----BEGIN PRIVATE KEY-----\n\
+****\n\
+-----END PRIVATE KEY-----\n",
+            )
+            .unwrap();
+        key_file.flush().unwrap();
+
+        let result = load_private_key(key_file.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_certs_invalid_pem() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut cert_file = NamedTempFile::new().unwrap();
+        cert_file
+            .write_all(
+                b"-----BEGIN CERTIFICATE-----\n\
+****\n\
+-----END CERTIFICATE-----\n",
+            )
+            .unwrap();
+        cert_file.flush().unwrap();
+
+        let result = load_certs(cert_file.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tls_client_invalid_ca_cert() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        init_crypto_provider();
+        let mut cert_file = NamedTempFile::new().unwrap();
+        cert_file
+            .write_all(
+                b"-----BEGIN CERTIFICATE-----\n\
+aGVsbG8=\n\
+-----END CERTIFICATE-----\n",
+            )
+            .unwrap();
+        cert_file.flush().unwrap();
+
+        let config = TlsClientConfig {
+            verify_server: true,
+            ca_cert_path: Some(cert_file.path().to_str().unwrap().to_string()),
+        };
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let result = TlsTransport::new_client(addr, config);
+        assert!(result.is_err());
+    }
+
     #[tokio::test]
     async fn test_bind_server_invalid_cert() {
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
@@ -966,6 +1305,129 @@ mod tests {
         };
         let result = TlsTransport::bind_server(addr, config).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_bind_server_invalid_key_path() {
+        init_crypto_provider();
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let (cert_pem, _key_pem) = generate_test_certs();
+        let mut cert_file = NamedTempFile::new().unwrap();
+        cert_file.write_all(&cert_pem).unwrap();
+        cert_file.flush().unwrap();
+
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let config = TlsServerConfig {
+            cert_path: cert_file.path().to_str().unwrap().to_string(),
+            key_path: "/nonexistent/key.pem".to_string(),
+        };
+        let result = TlsTransport::bind_server(addr, config).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_bind_server_mismatched_key() {
+        init_crypto_provider();
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let (cert_pem, _key_pem) = generate_test_certs();
+        let (_other_cert, other_key) = generate_test_certs();
+
+        let mut cert_file = NamedTempFile::new().unwrap();
+        cert_file.write_all(&cert_pem).unwrap();
+        cert_file.flush().unwrap();
+
+        let mut key_file = NamedTempFile::new().unwrap();
+        key_file.write_all(&other_key).unwrap();
+        key_file.flush().unwrap();
+
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let config = TlsServerConfig {
+            cert_path: cert_file.path().to_str().unwrap().to_string(),
+            key_path: key_file.path().to_str().unwrap().to_string(),
+        };
+        let result = TlsTransport::bind_server(addr, config).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_bind_server_forced_bind_error() {
+        init_crypto_provider();
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let (cert_pem, key_pem) = generate_test_certs();
+        let mut cert_file = NamedTempFile::new().unwrap();
+        cert_file.write_all(&cert_pem).unwrap();
+        cert_file.flush().unwrap();
+
+        let mut key_file = NamedTempFile::new().unwrap();
+        key_file.write_all(&key_pem).unwrap();
+        key_file.flush().unwrap();
+
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let config = TlsServerConfig {
+            cert_path: cert_file.path().to_str().unwrap().to_string(),
+            key_path: key_file.path().to_str().unwrap().to_string(),
+        };
+
+        force_bind_error_once();
+        let result = TlsTransport::bind_server(addr, config).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_bind_server_forced_local_addr_error() {
+        init_crypto_provider();
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let (cert_pem, key_pem) = generate_test_certs();
+        let mut cert_file = NamedTempFile::new().unwrap();
+        cert_file.write_all(&cert_pem).unwrap();
+        cert_file.flush().unwrap();
+
+        let mut key_file = NamedTempFile::new().unwrap();
+        key_file.write_all(&key_pem).unwrap();
+        key_file.flush().unwrap();
+
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let config = TlsServerConfig {
+            cert_path: cert_file.path().to_str().unwrap().to_string(),
+            key_path: key_file.path().to_str().unwrap().to_string(),
+        };
+
+        force_local_addr_error_once();
+        let result = TlsTransport::bind_server(addr, config).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_bind_server_success() {
+        init_crypto_provider();
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let (cert_pem, key_pem) = generate_test_certs();
+
+        let mut cert_file = NamedTempFile::new().unwrap();
+        cert_file.write_all(&cert_pem).unwrap();
+        cert_file.flush().unwrap();
+
+        let mut key_file = NamedTempFile::new().unwrap();
+        key_file.write_all(&key_pem).unwrap();
+        key_file.flush().unwrap();
+
+        let config = TlsServerConfig {
+            cert_path: cert_file.path().to_str().unwrap().to_string(),
+            key_path: key_file.path().to_str().unwrap().to_string(),
+        };
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let server = TlsTransport::bind_server(addr, config).await.unwrap();
+        assert_ne!(server.local_addr().port(), 0);
     }
 
     #[test]
@@ -1002,6 +1464,34 @@ mod tests {
 
         let dest = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)), 5061);
         let msg = OutgoingMessage::new(Bytes::from_static(b"test"), dest);
+        let result = sender.send(msg).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_tls_transport_send_forced_write_error() {
+        let (_server_rx, client, server_addr) = setup_tls_client_server().await;
+        force_write_error_once();
+        let msg = OutgoingMessage::new(Bytes::from_static(b"test"), server_addr);
+        let result = client.send(msg).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_tls_transport_send_forced_flush_error() {
+        let (_server_rx, client, server_addr) = setup_tls_client_server().await;
+        force_flush_error_once();
+        let msg = OutgoingMessage::new(Bytes::from_static(b"test"), server_addr);
+        let result = client.send(msg).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_tls_sender_send_forced_write_error() {
+        let (_server_rx, client, server_addr) = setup_tls_client_server().await;
+        let sender = client.sender();
+        force_write_error_once();
+        let msg = OutgoingMessage::new(Bytes::from_static(b"test"), server_addr);
         let result = sender.send(msg).await;
         assert!(result.is_err());
     }
@@ -1082,6 +1572,22 @@ mod tests {
         let key = private_key(&mut Cursor::new(key_pem)).unwrap().unwrap();
 
         ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .unwrap()
+    }
+
+    fn create_tls12_server_config(cert_pem: &[u8], key_pem: &[u8]) -> ServerConfig {
+        use rustls::version::TLS12;
+        use rustls_pemfile::{certs, private_key};
+        use std::io::Cursor;
+
+        let certs: Vec<CertificateDer<'static>> = certs(&mut Cursor::new(cert_pem))
+            .map(|r| r.unwrap())
+            .collect();
+        let key = private_key(&mut Cursor::new(key_pem)).unwrap().unwrap();
+
+        ServerConfig::builder_with_protocol_versions(&[&TLS12])
             .with_no_client_auth()
             .with_single_cert(certs, key)
             .unwrap()
@@ -1259,6 +1765,7 @@ mod tests {
     #[tokio::test]
     async fn test_tls_connection_close() {
         init_crypto_provider();
+        use tokio::io::AsyncWriteExt;
         use tokio::net::TcpListener as TokioListener;
 
         let (cert_pem, key_pem) = generate_test_certs();
@@ -1272,8 +1779,8 @@ mod tests {
         // Server closes immediately after connection
         let server_handle = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            let _tls_stream = acceptor.accept(stream).await.unwrap();
-            // Drop the stream to close it without TLS close_notify
+            let mut tls_stream = acceptor.accept(stream).await.unwrap();
+            let _ = tls_stream.shutdown().await;
         });
 
         let client_config = create_client_config(&cert_pem);
@@ -1285,15 +1792,57 @@ mod tests {
 
         let mut state = TlsConnectionState::new(TlsConnection::Client(tls_stream), server_addr);
 
-        // Connection was closed without proper TLS handshake termination
-        // This may return None or an error depending on timing
+        // Connection closed without any message payload
         let result = state.read_message().await;
-        // Either Ok(None) for clean close or Err for unexpected EOF is acceptable
-        match result {
-            Ok(None) => {} // Expected for clean close
-            Err(_) => {}   // Expected for unexpected EOF
-            Ok(Some(_)) => panic!("Should not receive a message"),
-        }
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+
+        server_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_tls_connection_read_and_write() {
+        init_crypto_provider();
+        use tokio::net::TcpListener as TokioListener;
+
+        let (cert_pem, key_pem) = generate_test_certs();
+        let server_config = create_server_config(&cert_pem, &key_pem);
+        let acceptor = TlsAcceptor::from(Arc::new(server_config));
+
+        let listener = TokioListener::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = listener.local_addr().unwrap();
+
+        let server_handle = tokio::spawn(async move {
+            let (stream, remote_addr) = listener.accept().await.unwrap();
+            let tls_stream = acceptor.accept(stream).await.unwrap();
+            let mut state = TlsConnectionState::new(TlsConnection::Server(tls_stream), remote_addr);
+
+            let msg = state.read_message().await.unwrap().unwrap();
+            assert!(msg.starts_with(b"OPTIONS"));
+
+            state
+                .write_message(b"SIP/2.0 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .unwrap();
+        });
+
+        let client_config = create_client_config(&cert_pem);
+        let connector = TlsConnector::from(Arc::new(client_config));
+        let stream = TcpStream::connect(server_addr).await.unwrap();
+        let server_name = ServerName::try_from("localhost").unwrap();
+        let mut tls_stream = connector.connect(server_name, stream).await.unwrap();
+
+        tls_stream
+            .write_all(b"OPTIONS sip:test@example.com SIP/2.0\r\nContent-Length: 0\r\n\r\n")
+            .await
+            .unwrap();
+        tls_stream.flush().await.unwrap();
+
+        let mut buf = [0u8; 64];
+        let n = tls_stream.read(&mut buf).await.unwrap();
+        assert!(std::str::from_utf8(&buf[..n])
+            .unwrap()
+            .starts_with("SIP/2.0 200 OK"));
 
         server_handle.await.unwrap();
     }
@@ -1452,11 +2001,10 @@ mod tests {
         let server_addr = listener.local_addr().unwrap();
 
         // Spawn server
-        tokio::spawn(async move {
-            if let Ok((stream, _)) = listener.accept().await {
-                let _ = acceptor.accept(stream).await;
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            }
+        let server_handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let _ = acceptor.accept(stream).await;
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         });
 
         // First connect
@@ -1466,6 +2014,8 @@ mod tests {
         // Second connect to same address should succeed without error (already connected)
         let result2 = transport.connect(server_addr, "localhost").await;
         assert!(result2.is_ok());
+
+        server_handle.await.unwrap();
     }
 
     #[tokio::test]
@@ -1484,7 +2034,7 @@ mod tests {
         let server_addr = listener.local_addr().unwrap();
 
         // Spawn server that accepts but doesn't do TLS
-        tokio::spawn(async move {
+        let server_handle = tokio::spawn(async move {
             let _ = listener.accept().await;
         });
 
@@ -1492,10 +2042,13 @@ mod tests {
         // Note: Empty string is actually invalid for ServerName
         let result = transport.connect(server_addr, "").await;
         assert!(result.is_err());
+
+        server_handle.await.unwrap();
     }
 
     #[tokio::test]
     async fn test_tls_transport_start_server() {
+        init_tracing();
         init_crypto_provider();
         use std::io::Write;
         use tempfile::NamedTempFile;
@@ -1527,35 +2080,101 @@ mod tests {
         let client_config = create_client_config(&cert_pem);
         let connector = TlsConnector::from(Arc::new(client_config));
 
-        tokio::spawn(async move {
+        let client_handle = tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            if let Ok(stream) = TcpStream::connect(server_addr).await {
-                let server_name = ServerName::try_from("localhost").unwrap();
-                if let Ok(mut tls_stream) = connector.connect(server_name, stream).await {
-                    let msg = b"INVITE sip:test@example.com SIP/2.0\r\nContent-Length: 0\r\n\r\n";
-                    let _ = tls_stream.write_all(msg).await;
-                    let _ = tls_stream.flush().await;
-                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                }
-            }
+            let stream = TcpStream::connect(server_addr).await.unwrap();
+            let server_name = ServerName::try_from("localhost").unwrap();
+            let mut tls_stream = connector.connect(server_name, stream).await.unwrap();
+            let msg = b"INVITE sip:test@example.com SIP/2.0\r\nContent-Length: 0\r\n\r\n";
+            let _ = tls_stream.write_all(msg).await;
+            let _ = tls_stream.flush().await;
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         });
 
         // Receive the message
-        tokio::select! {
-            result = rx.recv() => {
-                assert!(result.is_some());
-                let msg = result.unwrap();
-                assert!(msg.data.starts_with(b"INVITE"));
-                assert_eq!(msg.transport, TransportProtocol::Tls);
-            }
-            _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {
-                panic!("Timed out waiting for message");
-            }
-        }
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timed out waiting for message")
+            .expect("server receiver closed");
+        assert!(msg.data.starts_with(b"INVITE"));
+        assert_eq!(msg.transport, TransportProtocol::Tls);
+
+        client_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_tls_accept_error_forced_breaks_loop() {
+        init_tracing();
+        init_crypto_provider();
+        let server = bind_test_tls_server().await;
+
+        force_accept_error_once();
+        let (_rx, _sender) = server.start();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    #[tokio::test]
+    async fn test_tls_accept_error_other_message() {
+        init_tracing();
+        init_crypto_provider();
+        let server = bind_test_tls_server().await;
+
+        force_accept_error_other_message_once();
+        let (_rx, _sender) = server.start();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    #[tokio::test]
+    async fn test_tls_accept_error_other_kind() {
+        init_tracing();
+        init_crypto_provider();
+        let server = bind_test_tls_server().await;
+
+        force_accept_error_other_kind_once();
+        let (_rx, _sender) = server.start();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    #[tokio::test]
+    async fn test_tls_start_spawns_read_loop_for_existing_connections() {
+        init_tracing();
+        init_crypto_provider();
+        let (cert_pem, key_pem) = generate_test_certs();
+
+        let server_config = create_server_config(&cert_pem, &key_pem);
+        let acceptor = TlsAcceptor::from(Arc::new(server_config));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = listener.local_addr().unwrap();
+
+        let server_handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut tls_stream = acceptor.accept(stream).await.unwrap();
+            let msg = b"OPTIONS sip:test@example.com SIP/2.0\r\nContent-Length: 0\r\n\r\n";
+            let _ = tls_stream.write_all(msg).await;
+            let _ = tls_stream.flush().await;
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        });
+
+        let client_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let client_config = TlsClientConfig {
+            verify_server: false,
+            ca_cert_path: None,
+        };
+        let transport = TlsTransport::new_client(client_addr, client_config).unwrap();
+        transport.connect(server_addr, "localhost").await.unwrap();
+
+        let (mut rx, _sender) = transport.start();
+        let received = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timed out waiting for message");
+        assert!(received.is_some());
+
+        server_handle.await.unwrap();
     }
 
     #[tokio::test]
     async fn test_tls_transport_client_send_receive() {
+        init_tracing();
         init_crypto_provider();
         use std::io::Write;
         use tempfile::NamedTempFile;
@@ -1601,34 +2220,164 @@ mod tests {
 
         let client_handle = tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            if let Ok(stream) = TcpStream::connect(server_addr).await {
-                let server_name = ServerName::try_from("localhost").unwrap();
-                if let Ok(mut tls_stream) = connector.connect(server_name, stream).await {
-                    // Send message directly through the TLS stream
-                    let msg = b"REGISTER sip:example.com SIP/2.0\r\nContent-Length: 0\r\n\r\n";
-                    let _ = tls_stream.write_all(msg).await;
-                    let _ = tls_stream.flush().await;
-                }
-            }
+            let stream = TcpStream::connect(server_addr).await.unwrap();
+            let server_name = ServerName::try_from("localhost").unwrap();
+            let mut tls_stream = connector.connect(server_name, stream).await.unwrap();
+            // Send message directly through the TLS stream
+            let msg = b"REGISTER sip:example.com SIP/2.0\r\nContent-Length: 0\r\n\r\n";
+            let _ = tls_stream.write_all(msg).await;
+            let _ = tls_stream.flush().await;
         });
 
-        // Wait for message at server
-        tokio::select! {
-            result = server_rx.recv() => {
-                if let Some(msg) = result {
-                    assert!(msg.data.starts_with(b"REGISTER") || msg.data.starts_with(b"INVITE"));
-                }
-            }
-            _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {
-                // Timeout is ok, the connection setup might not complete in time
-            }
-        }
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(2), server_rx.recv())
+            .await
+            .expect("timed out waiting for message")
+            .expect("server receiver closed");
+        assert!(msg.data.starts_with(b"REGISTER"));
 
         client_handle.await.unwrap();
     }
 
     #[tokio::test]
+    async fn test_tls_transport_send_and_sender_send() {
+        init_crypto_provider();
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let (cert_pem, key_pem) = generate_test_certs();
+
+        let mut cert_file = NamedTempFile::new().unwrap();
+        cert_file.write_all(&cert_pem).unwrap();
+        cert_file.flush().unwrap();
+
+        let mut key_file = NamedTempFile::new().unwrap();
+        key_file.write_all(&key_pem).unwrap();
+        key_file.flush().unwrap();
+
+        let server_config = TlsServerConfig {
+            cert_path: cert_file.path().to_str().unwrap().to_string(),
+            key_path: key_file.path().to_str().unwrap().to_string(),
+        };
+
+        let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let server = TlsTransport::bind_server(server_addr, server_config)
+            .await
+            .unwrap();
+        let server_addr = server.local_addr();
+        let (mut server_rx, _server_sender) = server.start();
+
+        let client_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let client_config = TlsClientConfig {
+            verify_server: false,
+            ca_cert_path: None,
+        };
+        let client = TlsTransport::new_client(client_addr, client_config).unwrap();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            client.connect(server_addr, "localhost"),
+        )
+        .await
+        .expect("connect timed out")
+        .unwrap();
+
+        let request = OutgoingMessage::new(
+            Bytes::from_static(
+                b"OPTIONS sip:test@example.com SIP/2.0\r\nContent-Length: 0\r\n\r\n",
+            ),
+            server_addr,
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(2), client.send(request))
+            .await
+            .expect("send timed out")
+            .unwrap();
+
+        let received = tokio::time::timeout(std::time::Duration::from_secs(2), server_rx.recv())
+            .await
+            .expect("timed out waiting for message")
+            .expect("server receiver closed");
+        assert!(received.data.starts_with(b"OPTIONS"));
+
+        let (mut client_rx, client_sender) = client.start();
+        let extra = OutgoingMessage::new(
+            Bytes::from_static(b"BYE sip:test@example.com SIP/2.0\r\nContent-Length: 0\r\n\r\n"),
+            server_addr,
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(2), client_sender.send(extra))
+            .await
+            .expect("client sender timed out")
+            .unwrap();
+
+        client_rx.close();
+        drop(client_sender);
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+
+    #[tokio::test]
+    async fn test_tls_transport_start_handshake_failure() {
+        init_crypto_provider();
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let (cert_pem, key_pem) = generate_test_certs();
+
+        let mut cert_file = NamedTempFile::new().unwrap();
+        cert_file.write_all(&cert_pem).unwrap();
+        cert_file.flush().unwrap();
+
+        let mut key_file = NamedTempFile::new().unwrap();
+        key_file.write_all(&key_pem).unwrap();
+        key_file.flush().unwrap();
+
+        let server_config = TlsServerConfig {
+            cert_path: cert_file.path().to_str().unwrap().to_string(),
+            key_path: key_file.path().to_str().unwrap().to_string(),
+        };
+
+        let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let server = TlsTransport::bind_server(server_addr, server_config)
+            .await
+            .unwrap();
+        let server_addr = server.local_addr();
+        let (_server_rx, _server_sender) = server.start();
+
+        let stream = TcpStream::connect(server_addr).await.unwrap();
+        drop(stream);
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    #[tokio::test]
+    async fn test_tls12_handshake_with_no_certificate_verification() {
+        init_crypto_provider();
+        use tokio::net::TcpListener as TokioListener;
+
+        let (cert_pem, key_pem) = generate_test_certs();
+        let server_config = create_tls12_server_config(&cert_pem, &key_pem);
+        let acceptor = TlsAcceptor::from(Arc::new(server_config));
+
+        let listener = TokioListener::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = listener.local_addr().unwrap();
+
+        let server_handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let _ = acceptor.accept(stream).await.unwrap();
+        });
+
+        let client_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let config = TlsClientConfig {
+            verify_server: false,
+            ca_cert_path: None,
+        };
+        let client = TlsTransport::new_client(client_addr, config).unwrap();
+
+        let result = client.connect(server_addr, "localhost").await;
+        assert!(result.is_ok());
+
+        server_handle.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn test_read_loop_connection_close() {
+        init_tracing();
         init_crypto_provider();
         let (cert_pem, key_pem) = generate_test_certs();
 
@@ -1664,8 +2413,8 @@ mod tests {
         let connector = TlsConnector::from(Arc::new(client_config));
         let stream = TcpStream::connect(server_addr).await.unwrap();
         let server_name = ServerName::try_from("localhost").unwrap();
-        let tls_stream = connector.connect(server_name, stream).await.unwrap();
-        // Actually drop stream to close connection
+        let mut tls_stream = connector.connect(server_name, stream).await.unwrap();
+        let _ = tokio::io::AsyncWriteExt::shutdown(&mut tls_stream).await;
         drop(tls_stream);
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1673,12 +2422,8 @@ mod tests {
         // Shouldn't receive any messages (connection closed immediately)
         let result = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await;
 
-        // Either timeout or None is acceptable
-        match result {
-            Ok(None) => {}    // Channel closed
-            Err(_) => {}      // Timeout
-            Ok(Some(_)) => {} // Might get a message before close
-        }
+        // Any outcome is acceptable for this race.
+        let _ = result;
 
         // Use timeout to prevent test from hanging
         tokio::time::timeout(std::time::Duration::from_secs(5), server_handle)
@@ -1810,6 +2555,8 @@ mod tests {
                 .await
                 .unwrap();
             tls_stream.flush().await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            let _ = tls_stream.shutdown().await;
             // Close without sending complete message
         });
 
@@ -1824,11 +2571,45 @@ mod tests {
 
         // Should get None (connection closed with incomplete data) or an error
         let result = state.read_message().await;
-        match result {
-            Ok(None) => {} // Expected: connection closed with incomplete data
-            Err(_) => {}   // Also acceptable: error due to unexpected closure
-            Ok(Some(_)) => panic!("Should not receive a complete message"),
-        }
+        let has_complete = matches!(result, Ok(Some(_)));
+        assert!(!has_complete);
+        let ok = result.is_ok();
+        let empty = state.read_buf.is_empty();
+        assert_not_ok_and_empty(ok, empty);
+
+        server_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_empty_message_on_close() {
+        init_crypto_provider();
+        let (cert_pem, key_pem) = generate_test_certs();
+
+        let server_config = create_server_config(&cert_pem, &key_pem);
+        let acceptor = TlsAcceptor::from(Arc::new(server_config));
+
+        use tokio::net::TcpListener as TokioListener;
+        let listener = TokioListener::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = listener.local_addr().unwrap();
+
+        let server_handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut tls_stream = acceptor.accept(stream).await.unwrap();
+            let _ = tls_stream.shutdown().await;
+        });
+
+        let client_config = create_client_config(&cert_pem);
+        let connector = TlsConnector::from(Arc::new(client_config));
+
+        let stream = TcpStream::connect(server_addr).await.unwrap();
+        let server_name = ServerName::try_from("localhost").unwrap();
+        let tls_stream = connector.connect(server_name, stream).await.unwrap();
+
+        let mut state = TlsConnectionState::new(TlsConnection::Client(tls_stream), server_addr);
+
+        let result = state.read_message().await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
 
         server_handle.await.unwrap();
     }
@@ -1885,10 +2666,9 @@ mod tests {
         let server_addr = listener.local_addr().unwrap();
 
         tokio::spawn(async move {
-            if let Ok((stream, _)) = listener.accept().await {
-                // Drop immediately without TLS handshake
-                drop(stream);
-            }
+            let (stream, _) = listener.accept().await.unwrap();
+            // Drop immediately without TLS handshake
+            drop(stream);
         });
 
         // Try to connect with client
@@ -1990,9 +2770,6 @@ mod tests {
         let mut total = 0;
         while total < 10 {
             let n = tls_stream.read(&mut buf[total..]).await.unwrap();
-            if n == 0 {
-                break;
-            }
             total += n;
         }
         assert_eq!(&buf[..total], b"PART1PART2");

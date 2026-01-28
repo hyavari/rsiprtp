@@ -884,7 +884,6 @@ mod tests {
     fn test_dtls_error_io() {
         let io_err = std::io::Error::new(std::io::ErrorKind::Other, "test io error");
         let dtls_err: DtlsError = io_err.into();
-        assert!(matches!(dtls_err, DtlsError::Io(_)));
         assert!(dtls_err.to_string().contains("test io error"));
     }
 

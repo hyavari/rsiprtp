@@ -315,6 +315,22 @@ mod tests {
     }
 
     #[test]
+    fn test_sdp_parse_invalid_raddr_rport() {
+        let sdp =
+            "srflx1 1 UDP 1694498815 203.0.113.1 12345 typ srflx raddr 999.999.999.999 rport bad";
+        let candidate = Candidate::from_sdp(sdp);
+        assert!(candidate.is_none());
+    }
+
+    #[test]
+    fn test_sdp_parse_invalid_rport_only() {
+        let sdp =
+            "srflx1 1 UDP 1694498815 203.0.113.1 12345 typ srflx raddr 192.168.1.100 rport bad";
+        let candidate = Candidate::from_sdp(sdp);
+        assert!(candidate.is_none());
+    }
+
+    #[test]
     fn test_priority_calculation() {
         let host_prio = calculate_priority(CandidateType::Host, 65535, 1);
         let srflx_prio = calculate_priority(CandidateType::ServerReflexive, 65535, 1);
@@ -580,6 +596,13 @@ mod tests {
         let candidate = Candidate::from_sdp(sdp);
         // Should still parse, just without related_address
         assert!(candidate.is_some());
+    }
+
+    #[test]
+    fn test_from_sdp_raddr_with_non_rport_param() {
+        let sdp = "srflx1 1 UDP 1694498815 203.0.113.1 12345 typ srflx raddr 192.168.1.100 foo bar";
+        let candidate = Candidate::from_sdp(sdp).unwrap();
+        assert!(candidate.related_address.is_none());
     }
 
     #[test]

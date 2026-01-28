@@ -16,3 +16,6 @@ rand.workspace = true
 hmac.workspace = true
 sha1.workspace = true
 md5.workspace = true
+
+[dev-dependencies]
+tracing-subscriber = "0.3"

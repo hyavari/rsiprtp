@@ -2,7 +2,6 @@
 //!
 //! Builds SDP session descriptions programmatically.
 
-use std::fmt::Write;
 use std::net::IpAddr;
 
 use crate::parser::{
@@ -335,13 +334,15 @@ fn write_media(f: &mut std::fmt::Formatter<'_>, media: &MediaDescription) -> std
     };
 
     let mut line = String::new();
-    write!(
-        &mut line,
-        "m={} {} {}",
-        media_type, media.port, media.protocol
-    )?;
+    line.push_str("m=");
+    line.push_str(media_type);
+    line.push(' ');
+    line.push_str(&media.port.to_string());
+    line.push(' ');
+    line.push_str(&media.protocol);
     for fmt in &media.formats {
-        write!(&mut line, " {}", fmt)?;
+        line.push(' ');
+        line.push_str(fmt);
     }
     writeln!(f, "{}", line)?;
 
@@ -370,6 +371,7 @@ fn write_media(f: &mut std::fmt::Formatter<'_>, media: &MediaDescription) -> std
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write;
     use std::net::{Ipv4Addr, Ipv6Addr};
 
     // SdpBuilder tests
@@ -382,6 +384,14 @@ mod tests {
         assert_eq!(sdp.version, 0);
         assert_eq!(sdp.origin.username, "-");
         assert_eq!(sdp.session_name, "-");
+    }
+
+    #[test]
+    fn test_session_description_display() {
+        let addr = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
+        let sdp = SdpBuilder::new(addr).build();
+        let rendered = sdp.to_string();
+        assert!(rendered.contains("o="));
     }
 
     #[test]
@@ -470,6 +480,61 @@ mod tests {
     }
 
     #[test]
+    fn test_sdp_builder_media_type_variants() {
+        let addr = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
+        let mut sdp = SdpBuilder::new(addr).build();
+
+        sdp.media = vec![
+            MediaDescription {
+                media_type: MediaType::Video,
+                port: 5004,
+                num_ports: None,
+                protocol: "RTP/AVP".to_string(),
+                formats: vec!["96".to_string()],
+                connection: None,
+                bandwidth: Default::default(),
+                attributes: Vec::new(),
+            },
+            MediaDescription {
+                media_type: MediaType::Application,
+                port: 6000,
+                num_ports: None,
+                protocol: "UDP".to_string(),
+                formats: vec!["app".to_string()],
+                connection: None,
+                bandwidth: Default::default(),
+                attributes: Vec::new(),
+            },
+            MediaDescription {
+                media_type: MediaType::Message,
+                port: 7000,
+                num_ports: None,
+                protocol: "TCP".to_string(),
+                formats: vec!["msg".to_string()],
+                connection: None,
+                bandwidth: Default::default(),
+                attributes: Vec::new(),
+            },
+            MediaDescription {
+                media_type: MediaType::Other,
+                port: 8000,
+                num_ports: None,
+                protocol: "RTP/AVP".to_string(),
+                formats: vec!["0".to_string()],
+                connection: None,
+                bandwidth: Default::default(),
+                attributes: Vec::new(),
+            },
+        ];
+
+        let rendered = sdp.to_string();
+        assert!(rendered.contains("m=video"));
+        assert!(rendered.contains("m=application"));
+        assert!(rendered.contains("m=message"));
+        assert!(rendered.contains("m=other"));
+    }
+
+    #[test]
     fn test_sdp_builder_debug() {
         let addr = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
         let builder = SdpBuilder::new(addr);
@@ -540,7 +605,8 @@ mod tests {
         let has_rtpmap = media
             .attributes
             .iter()
-            .any(|a| a.name == "rtpmap" && a.value.as_ref().map_or(false, |v| v.contains("PCMU")));
+            .filter(|a| a.name == "rtpmap")
+            .any(|a| a.value.as_deref().unwrap_or("").contains("PCMU"));
         assert!(has_rtpmap);
     }
 
@@ -552,7 +618,8 @@ mod tests {
         let has_rtpmap = media
             .attributes
             .iter()
-            .any(|a| a.name == "rtpmap" && a.value.as_ref().map_or(false, |v| v.contains("PCMA")));
+            .filter(|a| a.name == "rtpmap")
+            .any(|a| a.value.as_deref().unwrap_or("").contains("PCMA"));
         assert!(has_rtpmap);
     }
 
@@ -564,7 +631,8 @@ mod tests {
         let has_rtpmap = media
             .attributes
             .iter()
-            .any(|a| a.name == "rtpmap" && a.value.as_ref().map_or(false, |v| v.contains("G722")));
+            .filter(|a| a.name == "rtpmap")
+            .any(|a| a.value.as_deref().unwrap_or("").contains("G722"));
         assert!(has_rtpmap);
     }
 
@@ -573,12 +641,11 @@ mod tests {
         let media = MediaBuilder::audio(49170).telephone_event(101).build();
         assert!(media.formats.contains(&"101".to_string()));
 
-        let has_rtpmap = media.attributes.iter().any(|a| {
-            a.name == "rtpmap"
-                && a.value
-                    .as_ref()
-                    .map_or(false, |v| v.contains("telephone-event"))
-        });
+        let has_rtpmap = media
+            .attributes
+            .iter()
+            .filter(|a| a.name == "rtpmap")
+            .any(|a| a.value.as_deref().unwrap_or("").contains("telephone-event"));
         assert!(has_rtpmap);
 
         let has_fmtp = media
@@ -596,12 +663,11 @@ mod tests {
 
         assert!(media.formats.contains(&"96".to_string()));
 
-        let has_rtpmap = media.attributes.iter().any(|a| {
-            a.name == "rtpmap"
-                && a.value
-                    .as_ref()
-                    .map_or(false, |v| v.contains("opus/48000/2"))
-        });
+        let has_rtpmap = media
+            .attributes
+            .iter()
+            .filter(|a| a.name == "rtpmap")
+            .any(|a| a.value.as_deref().unwrap_or("").contains("opus/48000/2"));
         assert!(has_rtpmap);
     }
 
@@ -615,7 +681,8 @@ mod tests {
         let has_rtpmap = media
             .attributes
             .iter()
-            .any(|a| a.name == "rtpmap" && a.value.as_ref().map_or(false, |v| v == "97 iLBC/8000"));
+            .filter(|a| a.name == "rtpmap")
+            .any(|a| a.value.as_deref().unwrap_or("") == "97 iLBC/8000");
         assert!(has_rtpmap);
     }
 
@@ -732,6 +799,91 @@ mod tests {
         let s = sdp.to_string();
         assert!(s.contains("a=ice-ufrag:abcd1234"));
         assert!(s.contains("a=rtcp-mux"));
+    }
+
+    #[test]
+    fn test_sdp_display_error_paths() {
+        struct CountingWriter {
+            writes: usize,
+        }
+
+        impl std::fmt::Write for CountingWriter {
+            fn write_str(&mut self, _s: &str) -> std::fmt::Result {
+                self.writes += 1;
+                Ok(())
+            }
+        }
+
+        struct FailingWriter {
+            fail_at: usize,
+            writes: usize,
+        }
+
+        impl FailingWriter {
+            fn new(fail_at: usize) -> Self {
+                Self { fail_at, writes: 0 }
+            }
+        }
+
+        impl std::fmt::Write for FailingWriter {
+            fn write_str(&mut self, _s: &str) -> std::fmt::Result {
+                self.writes += 1;
+                if self.writes == self.fail_at {
+                    return Err(std::fmt::Error);
+                }
+                Ok(())
+            }
+        }
+
+        let addr = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
+        let mut sdp = SdpBuilder::new(addr)
+            .session_name("Test Session")
+            .add_media(
+                MediaBuilder::audio(5000)
+                    .pcmu()
+                    .pcma()
+                    .g722()
+                    .telephone_event(101)
+                    .ptime(20),
+            )
+            .build();
+        sdp.session_info = Some("Test Info".to_string());
+        sdp.connection = Some(Connection {
+            net_type: "IN".to_string(),
+            addr_type: "IP4".to_string(),
+            address: "203.0.113.1".to_string(),
+        });
+        sdp.attributes.push(Attribute {
+            name: "ice-ufrag".to_string(),
+            value: Some("abcd1234".to_string()),
+        });
+        sdp.attributes.push(Attribute {
+            name: "rtcp-mux".to_string(),
+            value: None,
+        });
+        sdp.media[0].connection = Some(Connection {
+            net_type: "IN".to_string(),
+            addr_type: "IP4".to_string(),
+            address: "10.0.0.1".to_string(),
+        });
+        sdp.media[0].bandwidth.insert("AS".to_string(), 64);
+        sdp.media[0].attributes.push(Attribute {
+            name: "recvonly".to_string(),
+            value: None,
+        });
+        sdp.media[0].attributes.push(Attribute {
+            name: "fmtp".to_string(),
+            value: Some("101 0-16".to_string()),
+        });
+
+        let mut counter = CountingWriter { writes: 0 };
+        let _ = write!(&mut counter, "{}", sdp);
+        let total_writes = counter.writes;
+
+        for fail_at in 1..=total_writes {
+            let mut writer = FailingWriter::new(fail_at);
+            let _ = write!(&mut writer, "{}", sdp);
+        }
     }
 
     #[test]

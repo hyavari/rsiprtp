@@ -500,6 +500,15 @@ mod tests {
     }
 
     #[test]
+    fn test_mixer_mark_silent_missing_source() {
+        let mut mixer = AudioMixer::new(8000);
+
+        mixer.mark_silent(999);
+
+        assert_eq!(mixer.active_source_count(), 0);
+    }
+
+    #[test]
     fn test_conference_mixer() {
         let mut conf = ConferenceMixer::new(8000, 20);
 
@@ -556,6 +565,19 @@ mod tests {
     }
 
     #[test]
+    fn test_mixer_updates_existing_source_at_capacity() {
+        let mut mixer = AudioMixer::new(8000);
+        mixer.set_max_sources(1);
+
+        mixer.add_source(1, &[100]);
+        mixer.add_source(1, &[200]);
+
+        let (mixed, csrc) = mixer.mix(1);
+        assert_eq!(mixed[0], 200);
+        assert_eq!(csrc, vec![1]);
+    }
+
+    #[test]
     fn test_active_speaker_detector() {
         let mut detector = ActiveSpeakerDetector::new();
 
@@ -571,6 +593,19 @@ mod tests {
         assert!(!detector.is_speaking(2));
 
         // Active speaker should be the loud one
+        assert_eq!(detector.get_active_speaker(), Some(1));
+    }
+
+    #[test]
+    fn test_active_speaker_multiple_candidates() {
+        let mut detector = ActiveSpeakerDetector::new();
+
+        let loud: Vec<i16> = vec![12000, -12000, 9000, -9000];
+        let mid: Vec<i16> = vec![8000, -8000, 7000, -7000];
+
+        detector.update(1, &loud);
+        detector.update(2, &mid);
+
         assert_eq!(detector.get_active_speaker(), Some(1));
     }
 
@@ -600,9 +635,15 @@ mod tests {
 
         // Should be sorted by energy (highest first)
         assert!(!speakers.is_empty());
-        if speakers.len() >= 2 {
-            assert!(speakers[0].1 >= speakers[1].1);
-        }
+        assert!(speakers.len() >= 2);
+        assert!(speakers[0].1 >= speakers[1].1);
+    }
+
+    #[test]
+    fn test_active_speaker_empty_history_entry() {
+        let mut detector = ActiveSpeakerDetector::new();
+        detector.energy_history.insert(1, Vec::new());
+        assert_eq!(detector.get_smoothed_energy(1), 0.0);
     }
 
     #[test]
@@ -729,6 +770,25 @@ mod tests {
     }
 
     #[test]
+    fn test_mixer_csrc_list_truncates_when_over_limit() {
+        let mut mixer = AudioMixer::new(8000);
+
+        for i in 0..16 {
+            mixer.sources.insert(
+                100 + i,
+                SourceState {
+                    samples: vec![1],
+                    active: true,
+                    silent_frames: 0,
+                },
+            );
+        }
+
+        let (_, csrc) = mixer.mix(1);
+        assert_eq!(csrc.len(), 15);
+    }
+
+    #[test]
     fn test_mixer_max_sources_eviction() {
         let mut mixer = AudioMixer::new(8000);
         mixer.set_max_sources(2);
@@ -813,6 +873,14 @@ mod tests {
     }
 
     #[test]
+    fn test_active_speaker_default() {
+        let detector = ActiveSpeakerDetector::default();
+
+        assert!(detector.get_active_speakers().is_empty());
+        assert!(!detector.is_speaking(0));
+    }
+
+    #[test]
     fn test_active_speaker_remove() {
         let mut detector = ActiveSpeakerDetector::new();
 
@@ -848,22 +916,15 @@ mod tests {
         detector.update(1, &samples);
 
         let energy = detector.get_smoothed_energy(1);
+        assert!(energy > 0.0);
 
         // Very high threshold should not detect as speaking
         detector.set_threshold(0.5);
-        assert!(
-            !detector.is_speaking(1),
-            "Energy {} should be below 0.5",
-            energy
-        );
+        assert!(!detector.is_speaking(1));
 
         // Very low threshold should detect as speaking
         detector.set_threshold(0.001);
-        assert!(
-            detector.is_speaking(1),
-            "Energy {} should be above 0.001",
-            energy
-        );
+        assert!(detector.is_speaking(1));
     }
 
     #[test]
@@ -916,7 +977,7 @@ mod tests {
         // Should be nearly unchanged (gain ~1.0)
         for (orig, new) in original.iter().zip(samples.iter()) {
             let diff = (*orig as i32 - *new as i32).abs();
-            assert!(diff < 200, "Unexpected change: {} -> {}", orig, new);
+            assert!(diff < 200);
         }
     }
 
@@ -928,7 +989,8 @@ mod tests {
 
         // Should be clamped to valid range
         for &s in &samples {
-            assert!(s >= i16::MIN && s <= i16::MAX);
+            assert!(s >= i16::MIN);
+            assert!(s <= i16::MAX);
         }
     }
 

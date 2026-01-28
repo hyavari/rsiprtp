@@ -140,29 +140,25 @@ impl CallManager {
         let local_port = self.allocate_rtp_port();
         let result = create_answer(offer_sdp, &self.call_config.codecs, local_port);
 
-        if let Some((answer_sdp, negotiated)) = result {
-            if let Some(media) = negotiated.into_iter().next() {
-                self.calls.insert(call_id.clone(), call);
+        let (answer_sdp, negotiated) = result?;
 
-                // Update call with negotiated media
-                if let Some(call) = self.calls.get_mut(&call_id) {
-                    call.set_negotiated_media(media, local_port);
+        let media = negotiated.into_iter().next().expect("negotiated media");
 
-                    // Register dialog mapping
-                    if let Some(dialog_id) = call.dialog_id() {
-                        self.dialog_to_call
-                            .insert(dialog_id.clone(), call_id.clone());
-                    }
-                }
+        self.calls.insert(call_id.clone(), call);
 
-                self.events
-                    .push(ManagerEvent::IncomingCall(call_id.clone()));
+        // Update call with negotiated media
+        let call = self.calls.get_mut(&call_id).expect("call inserted");
+        call.set_negotiated_media(media, local_port);
 
-                return Some((call_id, answer_sdp, local_port));
-            }
-        }
+        // Register dialog mapping
+        let dialog_id = call.dialog_id().expect("dialog id");
+        self.dialog_to_call
+            .insert(dialog_id.clone(), call_id.clone());
 
-        None
+        self.events
+            .push(ManagerEvent::IncomingCall(call_id.clone()));
+
+        Some((call_id, answer_sdp, local_port))
     }
 
     /// Handle a 200 OK response to our INVITE.
@@ -192,10 +188,9 @@ impl CallManager {
         call.handle_answer();
 
         // Register dialog mapping
-        if let Some(dialog_id) = call.dialog_id() {
-            self.dialog_to_call
-                .insert(dialog_id.clone(), call_id.clone());
-        }
+        let dialog_id = call.dialog_id().expect("dialog id");
+        self.dialog_to_call
+            .insert(dialog_id.clone(), call_id.clone());
 
         self.events.push(ManagerEvent::CallStateChanged(
             call_id.clone(),
@@ -357,6 +352,18 @@ a=sendrecv
         SessionDescription::parse(sdp).unwrap()
     }
 
+    fn test_video_only_sdp() -> SessionDescription {
+        let sdp = r#"v=0
+o=- 123 1 IN IP4 192.168.1.1
+s=-
+c=IN IP4 192.168.1.1
+t=0 0
+m=video 5000 RTP/AVP 96
+a=rtpmap:96 H264/90000
+"#;
+        SessionDescription::parse(sdp).unwrap()
+    }
+
     // ManagerEvent tests
     #[test]
     fn test_manager_event_debug() {
@@ -506,6 +513,26 @@ a=sendrecv
     }
 
     #[test]
+    fn test_handle_incoming_invite_no_compatible_media() {
+        let mut manager = CallManager::new(ManagerConfig::default());
+
+        let dialog = Dialog::new_uas(
+            "call-124".to_string(),
+            "from-tag".to_string(),
+            "to-tag".to_string(),
+            "sip:alice@example.com".to_string(),
+            "sip:bob@example.com".to_string(),
+            1,
+        );
+
+        let offer_sdp = test_video_only_sdp();
+        let result = manager.handle_incoming_invite(dialog, &offer_sdp);
+
+        assert!(result.is_none());
+        assert_eq!(manager.call_count(), 0);
+    }
+
+    #[test]
     fn test_handle_invite_success() {
         let mut manager = CallManager::new(ManagerConfig::default());
 
@@ -528,6 +555,26 @@ a=sendrecv
         let call = manager.get_call(&call_id).unwrap();
         assert_eq!(call.state(), CallState::Established);
         assert!(call.media().is_some());
+    }
+
+    #[test]
+    fn test_handle_invite_success_no_media() {
+        let mut manager = CallManager::new(ManagerConfig::default());
+        let call_id = manager.create_call("sip:bob@example.com".to_string());
+
+        let dialog = Dialog::new_uac(
+            "call-123".to_string(),
+            "from-tag".to_string(),
+            "to-tag".to_string(),
+            "sip:alice@example.com".to_string(),
+            "sip:bob@example.com".to_string(),
+            1,
+        );
+
+        let answer_sdp = test_video_only_sdp();
+        let result = manager.handle_invite_success(&call_id, dialog, &answer_sdp);
+
+        assert!(!result);
     }
 
     #[test]
@@ -574,6 +621,33 @@ a=sendrecv
         let call = manager.get_call(&call_id).unwrap();
         // With early media, state should be EarlyMedia, not Ringing
         assert_eq!(call.state(), CallState::EarlyMedia);
+    }
+
+    #[test]
+    fn test_handle_provisional_missing_sdp_body() {
+        let mut manager = CallManager::new(ManagerConfig::default());
+
+        let call_id = manager.create_call("sip:bob@example.com".to_string());
+
+        manager.handle_provisional(&call_id, true, None);
+
+        let call = manager.get_call(&call_id).unwrap();
+        assert_eq!(call.state(), CallState::EarlyMedia);
+        assert!(call.media().is_none());
+    }
+
+    #[test]
+    fn test_handle_provisional_unmatched_media() {
+        let mut manager = CallManager::new(ManagerConfig::default());
+
+        let call_id = manager.create_call("sip:bob@example.com".to_string());
+        let video_sdp = test_video_only_sdp();
+
+        manager.handle_provisional(&call_id, true, Some(&video_sdp));
+
+        let call = manager.get_call(&call_id).unwrap();
+        assert_eq!(call.state(), CallState::EarlyMedia);
+        assert!(call.media().is_none());
     }
 
     #[test]
@@ -685,6 +759,19 @@ a=sendrecv
             DialogId::new("call-id".to_string(), "from".to_string(), "to".to_string());
         manager.handle_bye(&fake_dialog_id);
         // Should not panic
+    }
+
+    #[test]
+    fn test_handle_bye_missing_call_entry() {
+        let mut manager = CallManager::new(ManagerConfig::default());
+
+        let dialog_id = DialogId::new("call-id".to_string(), "from".to_string(), "to".to_string());
+        let call_id = CallId::new();
+
+        manager.dialog_to_call.insert(dialog_id.clone(), call_id);
+        manager.handle_bye(&dialog_id);
+
+        assert!(manager.events.is_empty());
     }
 
     #[test]
@@ -800,6 +887,29 @@ a=sendrecv
     }
 
     #[test]
+    fn test_answer_call_inbound_not_ringing() {
+        let mut manager = CallManager::new(ManagerConfig::default());
+
+        let dialog = Dialog::new_uas(
+            "call-124".to_string(),
+            "from-tag".to_string(),
+            "to-tag".to_string(),
+            "sip:alice@example.com".to_string(),
+            "sip:bob@example.com".to_string(),
+            1,
+        );
+
+        let offer_sdp = test_sdp();
+        let (call_id, _, _) = manager.handle_incoming_invite(dialog, &offer_sdp).unwrap();
+
+        let call = manager.get_call_mut(&call_id).unwrap();
+        call.set_state(CallState::Established);
+
+        let result = manager.answer_call(&call_id);
+        assert!(!result);
+    }
+
+    #[test]
     fn test_answer_call_outbound() {
         let mut manager = CallManager::new(ManagerConfig::default());
         let call_id = manager.create_call("sip:bob@example.com".to_string());
@@ -840,6 +950,29 @@ a=sendrecv
     }
 
     #[test]
+    fn test_reject_call_inbound_not_ringing() {
+        let mut manager = CallManager::new(ManagerConfig::default());
+
+        let dialog = Dialog::new_uas(
+            "call-125".to_string(),
+            "from-tag".to_string(),
+            "to-tag".to_string(),
+            "sip:alice@example.com".to_string(),
+            "sip:bob@example.com".to_string(),
+            1,
+        );
+
+        let offer_sdp = test_sdp();
+        let (call_id, _, _) = manager.handle_incoming_invite(dialog, &offer_sdp).unwrap();
+
+        let call = manager.get_call_mut(&call_id).unwrap();
+        call.set_state(CallState::Established);
+
+        let result = manager.reject_call(&call_id);
+        assert!(result.is_none());
+    }
+
+    #[test]
     fn test_reject_call_outbound() {
         let mut manager = CallManager::new(ManagerConfig::default());
         let call_id = manager.create_call("sip:bob@example.com".to_string());
@@ -869,18 +1002,16 @@ a=sendrecv
         assert_eq!(active.len(), 0);
 
         // Make one call active by setting state to Established
-        if let Some(call) = manager.get_call_mut(&call_id1) {
-            call.set_state(CallState::Established);
-        }
+        let call = manager.get_call_mut(&call_id1).expect("call exists");
+        call.set_state(CallState::Established);
 
         let active = manager.active_calls();
         assert_eq!(active.len(), 1);
         assert!(active.contains(&call_id1));
 
         // Make second call active
-        if let Some(call) = manager.get_call_mut(&call_id2) {
-            call.set_state(CallState::Established);
-        }
+        let call = manager.get_call_mut(&call_id2).expect("call exists");
+        call.set_state(CallState::Established);
 
         let active = manager.active_calls();
         assert_eq!(active.len(), 2);

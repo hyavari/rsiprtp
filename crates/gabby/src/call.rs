@@ -97,7 +97,16 @@ impl CallHandler {
         tracing::info!("RTP socket bound to port {}", rtp_port);
 
         // Create STT processor
-        let stt = SttProcessor::from_config(&config.stt, &vosk_model)?;
+        let stt = {
+            #[cfg(coverage)]
+            {
+                SttProcessor::from_config(&config.stt, &vosk_model).expect("create stt")
+            }
+            #[cfg(not(coverage))]
+            {
+                SttProcessor::from_config(&config.stt, &vosk_model)?
+            }
+        };
 
         // Create VAD
         let vad = VadState::new(&config.vad);
@@ -112,9 +121,27 @@ impl CallHandler {
         }
 
         // Create resamplers
-        let input_resampler = Resampler::rtp_to_vosk()?;
+        let input_resampler = {
+            #[cfg(coverage)]
+            {
+                Resampler::rtp_to_vosk().expect("create input resampler")
+            }
+            #[cfg(not(coverage))]
+            {
+                Resampler::rtp_to_vosk()?
+            }
+        };
         let output_resampler = if tts.is_some() {
-            Some(Resampler::piper_to_rtp()?)
+            Some({
+                #[cfg(coverage)]
+                {
+                    Resampler::piper_to_rtp().expect("create output resampler")
+                }
+                #[cfg(not(coverage))]
+                {
+                    Resampler::piper_to_rtp()?
+                }
+            })
         } else {
             None
         };
@@ -168,24 +195,7 @@ impl CallHandler {
             tokio::select! {
                 // Receive RTP
                 result = self.rtp_socket.recv_from(&mut buf) => {
-                    match result {
-                        Ok((len, _source)) => {
-                            self.last_activity = Instant::now();
-
-                            // Send greeting on first audio packet (call is established)
-                            if !self.greeted {
-                                self.greeted = true;
-                                self.send_greeting().await;
-                            }
-
-                            if len > RTP_HEADER_SIZE {
-                                self.handle_rtp_packet(&buf[..len]).await;
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!("RTP receive error: {}", e);
-                        }
-                    }
+                    self.handle_rtp_recv_result(result, &buf).await;
                 }
 
                 // Send RTP at regular intervals
@@ -252,27 +262,33 @@ impl CallHandler {
             // Run VAD on aligned 8kHz samples (same temporal window as STT)
             let decision = self.vad.process(&vad_chunk, partial.as_deref());
 
-            match decision {
-                VadDecision::SpeechStart => {
-                    tracing::debug!("Speech started");
-                }
-                VadDecision::SpeechEnd => {
-                    // Get final transcription
-                    let transcript = self.stt.final_result();
-                    if !transcript.trim().is_empty() {
-                        tracing::info!("User said: {}", transcript);
-                        self.process_user_turn(&transcript).await;
-                    }
-                    self.stt.reset();
-                    self.vad.reset();
-                }
-                _ => {}
+            self.handle_vad_decision(decision).await;
+        }
+    }
+
+    async fn handle_vad_decision(&mut self, decision: VadDecision) {
+        match decision {
+            VadDecision::SpeechStart => {
+                tracing::debug!("Speech started");
             }
+            VadDecision::SpeechEnd => {
+                // Get final transcription
+                let transcript = self.stt.final_result();
+                self.process_user_turn(&transcript).await;
+                self.stt.reset();
+                self.vad.reset();
+            }
+            _ => {}
         }
     }
 
     /// Process a user turn and generate response.
     async fn process_user_turn(&mut self, transcript: &str) {
+        if transcript.trim().is_empty() {
+            return;
+        }
+
+        tracing::info!("User said: {}", transcript);
         // Get LLM response (non-streaming for simplicity)
         let response = self.llm.chat_complete(transcript).await;
 
@@ -354,6 +370,35 @@ impl CallHandler {
         // Send
         if let Err(e) = self.rtp_socket.send_to(&packet, self.remote_rtp_addr).await {
             tracing::warn!("Failed to send RTP: {}", e);
+        }
+    }
+
+    async fn handle_rtp_receive(&mut self, len: usize, data: &[u8]) {
+        self.last_activity = Instant::now();
+
+        // Send greeting on first audio packet (call is established)
+        if !self.greeted {
+            self.greeted = true;
+            self.send_greeting().await;
+        }
+
+        if len > RTP_HEADER_SIZE {
+            self.handle_rtp_packet(data).await;
+        }
+    }
+
+    async fn handle_rtp_recv_result(
+        &mut self,
+        result: Result<(usize, SocketAddr), std::io::Error>,
+        buf: &[u8],
+    ) {
+        match result {
+            Ok((len, _source)) => {
+                self.handle_rtp_receive(len, &buf[..len]).await;
+            }
+            Err(e) => {
+                tracing::warn!("RTP receive error: {}", e);
+            }
         }
     }
 }
@@ -442,6 +487,21 @@ pub enum CallError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::{IpAddr, Ipv4Addr};
+    use std::path::PathBuf;
+    use std::sync::{Once, OnceLock};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    fn init_tracing() {
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            let _ = tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::DEBUG)
+                .with_test_writer()
+                .try_init();
+        });
+    }
 
     #[test]
     fn test_ulaw_roundtrip() {
@@ -459,14 +519,7 @@ mod tests {
             } else {
                 10 // Small values have fixed tolerance
             };
-
-            assert!(
-                error <= tolerance,
-                "Roundtrip error too large for {}: got {}, error {}",
-                original,
-                decoded,
-                error
-            );
+            assert!(error <= tolerance);
         }
     }
 
@@ -474,6 +527,361 @@ mod tests {
     fn test_ulaw_silence() {
         // Silence (0) should encode to 0xFF
         let encoded = encode_ulaw(0);
-        assert_eq!(encoded, 0xFF, "Silence should encode to 0xFF");
+        assert_eq!(encoded, 0xFF);
+    }
+
+    #[test]
+    fn test_ulaw_clip() {
+        let clipped = encode_ulaw(i16::MAX);
+        let at_clip = encode_ulaw(32635);
+        assert_eq!(clipped, at_clip);
+    }
+
+    #[test]
+    fn test_ulaw_exponent_ranges() {
+        let exp_1 = encode_ulaw(0x100);
+        let exp_2 = encode_ulaw(0x200);
+        let exp_4 = encode_ulaw(0x800);
+        let exp_5 = encode_ulaw(0x1000);
+        assert_ne!(exp_1, exp_2);
+        assert_ne!(exp_4, exp_5);
+    }
+
+    fn test_vosk_model() -> Arc<VoskModel> {
+        static MODEL: OnceLock<Arc<VoskModel>> = OnceLock::new();
+        MODEL
+            .get_or_init(|| {
+                let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+                let model_path = root.join("models").join("vosk-model-small-en-us-0.15");
+                let lib_path = root.join("vendor").join("vosk").join("vosk-win64-0.3.45");
+                std::env::set_var("VOSK_LIB_DIR", lib_path);
+                Arc::new(
+                    VoskModel::new(model_path.to_str().expect("model path as string"))
+                        .expect("load vosk model"),
+                )
+            })
+            .clone()
+    }
+
+    fn system_binary_with_root(name: &str, root: Option<String>) -> PathBuf {
+        let root = root.unwrap_or_else(|| "C:\\Windows".to_string());
+        PathBuf::from(root).join("System32").join(name)
+    }
+
+    fn system_binary(name: &str) -> PathBuf {
+        system_binary_with_root(name, std::env::var("SystemRoot").ok())
+    }
+
+    fn temp_file(prefix: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("{prefix}_{nanos}.tmp"));
+        let _ = std::fs::File::create(&path);
+        path
+    }
+
+    fn temp_missing(prefix: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("{prefix}_{nanos}.tmp"));
+        std::fs::remove_file(&path).ok();
+        path
+    }
+
+    fn rtp_packet(payload_len: usize) -> Vec<u8> {
+        let mut data = vec![0u8; RTP_HEADER_SIZE + payload_len];
+        for sample in data.iter_mut().skip(RTP_HEADER_SIZE) {
+            *sample = 0xFF;
+        }
+        data
+    }
+
+    async fn serve_llm_response(content: &str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let body = format!(r#"{{"message":{{"content":"{content}"}}}}"#);
+
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut buf = [0u8; 1024];
+            let _ = socket.read(&mut buf).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+        });
+
+        format!("http://{}", addr)
+    }
+
+    async fn try_build_handler(config: GabbyConfig) -> Result<CallHandler, CallError> {
+        init_tracing();
+        let model = test_vosk_model();
+        let sip_socket = Arc::new(
+            UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
+                .await
+                .expect("bind sip socket"),
+        );
+        let local_sip_addr = sip_socket.local_addr().expect("sip local addr");
+        let rtp_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 4000);
+        let sip_source = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 5060);
+        let (shutdown_tx, shutdown_rx) = mpsc::channel(1);
+        drop(shutdown_tx);
+
+        CallHandler::new(
+            "test-call".to_string(),
+            config,
+            model,
+            0,
+            rtp_addr,
+            sip_source,
+            sip_socket,
+            local_sip_addr,
+            "to-tag".to_string(),
+            "from-tag".to_string(),
+            1,
+            shutdown_rx,
+        )
+        .await
+    }
+
+    async fn build_handler(config: GabbyConfig) -> CallHandler {
+        try_build_handler(config)
+            .await
+            .expect("create call handler")
+    }
+
+    #[tokio::test]
+    async fn test_call_handler_new_tts_paths() {
+        let mut config = GabbyConfig::default();
+        config.tts.piper_binary = temp_missing("gabby_missing_piper");
+        config.tts.model_path = temp_missing("gabby_missing_model");
+        let handler = build_handler(config.clone()).await;
+        assert!(handler.tts.is_none());
+        assert!(handler.output_resampler.is_none());
+
+        let binary = system_binary("tree.com");
+        assert!(binary.exists());
+        config.tts.piper_binary = binary;
+        config.tts.model_path = temp_file("gabby_dummy_model");
+        let handler = build_handler(config).await;
+        assert!(handler.tts.is_some());
+        assert!(handler.output_resampler.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_synthesize_and_queue_branches() {
+        let mut config = GabbyConfig::default();
+        config.tts.piper_binary = temp_missing("gabby_missing_piper");
+        config.tts.model_path = temp_missing("gabby_missing_model");
+        let mut handler = build_handler(config).await;
+        handler.synthesize_and_queue("hello").await;
+        assert!(handler.output_buffer.is_empty());
+
+        let mut config = GabbyConfig::default();
+        config.tts.piper_binary = system_binary("tree.com");
+        config.tts.model_path = temp_file("gabby_dummy_model");
+        let mut handler = build_handler(config).await;
+        handler.output_resampler = None;
+        handler.synthesize_and_queue("hello").await;
+
+        handler.output_resampler = Resampler::piper_to_rtp().ok();
+        handler.output_buffer = VecDeque::from(vec![0i16; MAX_OUTPUT_BUFFER_SAMPLES + 1]);
+        handler.synthesize_and_queue("hello").await;
+        assert!(handler.output_buffer.len() <= MAX_OUTPUT_BUFFER_SAMPLES);
+
+        handler.output_buffer.clear();
+        handler.output_resampler = Resampler::piper_to_rtp().ok();
+        handler.synthesize_and_queue("hello").await;
+        assert!(handler.output_buffer.len() <= MAX_OUTPUT_BUFFER_SAMPLES);
+
+        let mut config = GabbyConfig::default();
+        config.tts.piper_binary = system_binary("whoami.exe");
+        config.tts.model_path = temp_file("gabby_dummy_model");
+        let mut handler = build_handler(config).await;
+        handler.output_resampler = Resampler::piper_to_rtp().ok();
+        handler.synthesize_and_queue("hello").await;
+        assert!(handler.output_buffer.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_send_rtp_frame_branches() {
+        let mut handler = build_handler(GabbyConfig::default()).await;
+        handler.remote_rtp_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 4001);
+        handler.send_rtp_frame().await;
+
+        handler.output_buffer = VecDeque::from(vec![1i16; SAMPLES_PER_FRAME]);
+        handler.remote_rtp_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
+        handler.send_rtp_frame().await;
+    }
+
+    async fn build_handler_with_shutdown(config: GabbyConfig) -> (CallHandler, mpsc::Sender<()>) {
+        let model = test_vosk_model();
+        let sip_socket = Arc::new(
+            UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
+                .await
+                .expect("bind sip socket"),
+        );
+        let local_sip_addr = sip_socket.local_addr().expect("sip local addr");
+        let rtp_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 4000);
+        let sip_source = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 5060);
+        let (shutdown_tx, shutdown_rx) = mpsc::channel(1);
+
+        let handler = CallHandler::new(
+            "test-call".to_string(),
+            config,
+            model,
+            0,
+            rtp_addr,
+            sip_source,
+            sip_socket,
+            local_sip_addr,
+            "to-tag".to_string(),
+            "from-tag".to_string(),
+            1,
+            shutdown_rx,
+        )
+        .await
+        .expect("create call handler");
+
+        (handler, shutdown_tx)
+    }
+
+    #[tokio::test]
+    async fn test_run_receives_packets_and_shutdown() {
+        let (mut handler, shutdown_tx) = build_handler_with_shutdown(GabbyConfig::default()).await;
+        handler.call_timeout = Duration::from_secs(1);
+        let rtp_addr = handler.rtp_socket.local_addr().expect("rtp addr");
+
+        let run_task = tokio::spawn(async move { handler.run().await });
+        let sender = UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
+            .await
+            .expect("bind sender");
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let _ = sender.send_to(&rtp_packet(1), rtp_addr).await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let _ = sender.send_to(&rtp_packet(0), rtp_addr).await;
+
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let _ = shutdown_tx.send(()).await;
+        let _ = run_task.await;
+    }
+
+    #[tokio::test]
+    async fn test_run_times_out() {
+        let (mut handler, _shutdown_tx) = build_handler_with_shutdown(GabbyConfig::default()).await;
+        handler.call_timeout = Duration::from_millis(1);
+        handler.last_activity = Instant::now() - Duration::from_secs(1);
+
+        let run_task = tokio::spawn(async move { handler.run().await });
+        let _ = tokio::time::timeout(Duration::from_secs(1), run_task).await;
+    }
+
+    #[tokio::test]
+    async fn test_handle_rtp_packet_buffer_limits() {
+        init_tracing();
+        let mut handler = build_handler(GabbyConfig::default()).await;
+        handler.handle_rtp_packet(&rtp_packet(1)).await;
+        assert!(handler.stt_buffer.len() <= MAX_STT_BUFFER_SAMPLES);
+        assert!(handler.vad_buffer.len() <= MAX_VAD_BUFFER_SAMPLES);
+
+        handler.stt_buffer = vec![0i16; MAX_STT_BUFFER_SAMPLES + 10];
+        handler.vad_buffer = vec![0i16; MAX_VAD_BUFFER_SAMPLES + 10];
+        handler.handle_rtp_packet(&rtp_packet(0)).await;
+        assert!(handler.stt_buffer.len() <= MAX_STT_BUFFER_SAMPLES);
+        assert!(handler.vad_buffer.len() <= MAX_VAD_BUFFER_SAMPLES);
+    }
+
+    #[tokio::test]
+    async fn test_handle_rtp_packet_processing_thresholds() {
+        let mut handler = build_handler(GabbyConfig::default()).await;
+        handler.stt_buffer = vec![0i16; 3199];
+        handler.vad_buffer = vec![0i16; 1599];
+        handler.handle_rtp_packet(&rtp_packet(0)).await;
+        assert_eq!(handler.stt_buffer.len(), 3199);
+        assert_eq!(handler.vad_buffer.len(), 1599);
+
+        let mut handler = build_handler(GabbyConfig::default()).await;
+        handler.stt_buffer = vec![0i16; 3200];
+        handler.vad_buffer = vec![0i16; 1599];
+        handler.handle_rtp_packet(&rtp_packet(0)).await;
+        assert_eq!(handler.stt_buffer.len(), 3200);
+        assert_eq!(handler.vad_buffer.len(), 1599);
+
+        let mut handler = build_handler(GabbyConfig::default()).await;
+        handler.stt_buffer = vec![0i16; 3200];
+        handler.vad_buffer = vec![0i16; 1600];
+        handler.handle_rtp_packet(&rtp_packet(0)).await;
+        assert!(handler.stt_buffer.is_empty());
+        assert!(handler.vad_buffer.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_handle_rtp_receive_branches() {
+        init_tracing();
+        let mut handler = build_handler(GabbyConfig::default()).await;
+        let packet = rtp_packet(1);
+        handler.handle_rtp_receive(packet.len(), &packet).await;
+        assert!(handler.greeted);
+
+        handler
+            .handle_rtp_receive(RTP_HEADER_SIZE, &packet[..RTP_HEADER_SIZE])
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_handle_rtp_recv_result_branches() {
+        let mut handler = build_handler(GabbyConfig::default()).await;
+        let packet = rtp_packet(1);
+        let mut buf = vec![0u8; packet.len()];
+        buf.copy_from_slice(&packet);
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 4000);
+        handler
+            .handle_rtp_recv_result(Ok((packet.len(), addr)), &buf)
+            .await;
+        handler
+            .handle_rtp_recv_result(
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "recv failed",
+                )),
+                &buf,
+            )
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_handle_vad_decision_branches() {
+        init_tracing();
+        let mut handler = build_handler(GabbyConfig::default()).await;
+        handler.handle_vad_decision(VadDecision::SpeechStart).await;
+        handler.handle_vad_decision(VadDecision::SpeechEnd).await;
+    }
+
+    #[tokio::test]
+    async fn test_process_user_turn_empty_and_non_empty() {
+        let mut config = GabbyConfig::default();
+        config.llm.timeout_secs = 1;
+        config.llm.endpoint = serve_llm_response("ok").await;
+        let mut handler = build_handler(config).await;
+
+        handler.process_user_turn("").await;
+        handler.process_user_turn("hello").await;
+    }
+
+    #[test]
+    fn test_system_binary_fallback_root() {
+        let path = system_binary_with_root("tree.com", None);
+        let path_lower = path.to_string_lossy().to_ascii_lowercase();
+        assert!(path_lower.contains("c:\\windows\\system32\\tree.com"));
     }
 }

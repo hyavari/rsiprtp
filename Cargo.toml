@@ -72,6 +72,7 @@ aes = "0.8"
 ctr = "0.9"
 hmac = "0.12"
 sha1 = "0.10"
+sha2 = "0.10"
 base64 = "0.22"
 
 # Internal crates

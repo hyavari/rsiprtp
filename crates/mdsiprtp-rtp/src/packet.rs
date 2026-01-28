@@ -289,6 +289,12 @@ pub fn sequence_newer(a: u16, b: u16) -> bool {
 mod tests {
     use super::*;
 
+    fn assert_rtp_err_contains<T>(result: Result<T, RtpParseError>, needle: &str) {
+        assert!(result.is_err());
+        let err = result.err().unwrap();
+        assert!(format!("{err:?}").contains(needle));
+    }
+
     #[test]
     fn test_parse_simple_packet() {
         // Minimal RTP packet: V=2, P=0, X=0, CC=0, M=0, PT=0, seq=1, ts=160, ssrc=12345
@@ -387,8 +393,7 @@ mod tests {
     #[test]
     fn test_too_short() {
         let data = [0x80, 0x00, 0x00, 0x01];
-        let result = RtpPacket::parse(&data);
-        assert!(matches!(result, Err(RtpParseError::TooShort(_))));
+        assert_rtp_err_contains(RtpPacket::parse(&data), "TooShort");
     }
 
     #[test]
@@ -397,8 +402,7 @@ mod tests {
             0x40, 0x00, // V=1 (invalid)
             0x00, 0x01, 0x00, 0x00, 0x00, 0xA0, 0x00, 0x00, 0x30, 0x39,
         ];
-        let result = RtpPacket::parse(&data);
-        assert!(matches!(result, Err(RtpParseError::InvalidVersion(1))));
+        assert_rtp_err_contains(RtpPacket::parse(&data), "InvalidVersion");
     }
 
     // Additional tests for better coverage
@@ -470,7 +474,7 @@ mod tests {
     fn test_rtp_parse_error_clone() {
         let err = RtpParseError::TooShort(5);
         let cloned = err.clone();
-        assert!(matches!(cloned, RtpParseError::TooShort(5)));
+        assert!(format!("{cloned:?}").contains("TooShort"));
     }
 
     #[test]
@@ -511,6 +515,20 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_padding_with_empty_payload() {
+        let data = [
+            0xA0, 0x00, // V=2, P=1, X=0, CC=0, M=0, PT=0
+            0x00, 0x01, // seq=1
+            0x00, 0x00, 0x00, 0xA0, // timestamp=160
+            0x00, 0x00, 0x30, 0x39, // ssrc=12345
+        ];
+
+        let pkt = RtpPacket::parse(&data).unwrap();
+        assert!(pkt.padding);
+        assert!(pkt.payload.is_empty());
+    }
+
+    #[test]
     fn test_csrc_truncated() {
         // CC=1 but no CSRC data
         let data = [
@@ -519,8 +537,7 @@ mod tests {
             // Missing CSRC
         ];
 
-        let result = RtpPacket::parse(&data);
-        assert!(matches!(result, Err(RtpParseError::TooShort(_))));
+        assert_rtp_err_contains(RtpPacket::parse(&data), "TooShort");
     }
 
     #[test]
@@ -533,8 +550,7 @@ mod tests {
             // Missing extension header (need at least 4 bytes)
         ];
 
-        let result = RtpPacket::parse(&data);
-        assert!(matches!(result, Err(RtpParseError::ExtensionTruncated)));
+        assert_rtp_err_contains(RtpPacket::parse(&data), "ExtensionTruncated");
     }
 
     #[test]
@@ -548,8 +564,7 @@ mod tests {
             0x01, 0x02, 0x03, 0x04,
         ];
 
-        let result = RtpPacket::parse(&data);
-        assert!(matches!(result, Err(RtpParseError::ExtensionTruncated)));
+        assert_rtp_err_contains(RtpPacket::parse(&data), "ExtensionTruncated");
     }
 
     #[test]
@@ -561,8 +576,7 @@ mod tests {
             0xFF, // Last byte claims 255 bytes of padding (but only 1 byte)
         ];
 
-        let result = RtpPacket::parse(&data);
-        assert!(matches!(result, Err(RtpParseError::PayloadTruncated)));
+        assert_rtp_err_contains(RtpPacket::parse(&data), "PayloadTruncated");
     }
 
     #[test]

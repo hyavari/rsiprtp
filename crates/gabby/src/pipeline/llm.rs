@@ -181,6 +181,35 @@ impl OllamaClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::LlmConfig;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    async fn serve_once(status_line: &str, body: &str, content_type: &str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let status_line = status_line.to_string();
+        let body = body.to_string();
+        let content_type = content_type.to_string();
+
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut buf = [0u8; 1024];
+            let _ = socket.read(&mut buf).await;
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n\r\n{}",
+                status_line,
+                content_type,
+                body.len(),
+                body
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+        });
+
+        format!("http://{}", addr)
+    }
 
     #[test]
     fn test_trim_history() {
@@ -202,5 +231,117 @@ mod tests {
 
         // Should have trimmed to 4 messages
         assert!(client.history.len() <= 4);
+    }
+
+    #[test]
+    fn test_trim_history_noop_under_limit() {
+        let config = LlmConfig {
+            max_history_messages: 4,
+            ..Default::default()
+        };
+        let mut client = OllamaClient::new(&config);
+
+        for i in 0..4 {
+            client.history.push(Message {
+                role: if i % 2 == 0 { "user" } else { "assistant" }.to_string(),
+                content: format!("Message {}", i),
+            });
+        }
+
+        client.trim_history();
+
+        assert_eq!(client.history.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn test_chat_complete_non_success_response() {
+        let endpoint = serve_once("500 Internal Server Error", "", "text/plain").await;
+        let mut config = LlmConfig::default();
+        config.endpoint = endpoint;
+
+        let mut client = OllamaClient::new(&config);
+        let response = client.chat_complete("hello").await;
+        assert_eq!(response, "I'm having trouble thinking right now.");
+        assert_eq!(client.history.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_chat_complete_empty_content() {
+        let body = r#"{"message":{"content":""}}"#;
+        let endpoint = serve_once("200 OK", body, "application/json").await;
+        let mut config = LlmConfig::default();
+        config.endpoint = endpoint;
+
+        let mut client = OllamaClient::new(&config);
+        let response = client.chat_complete("hello").await;
+        assert!(response.is_empty());
+        assert_eq!(client.history.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_chat_complete_non_empty_content() {
+        let body = r#"{"message":{"content":"hello there"}}"#;
+        let endpoint = serve_once("200 OK", body, "application/json").await;
+        let mut config = LlmConfig::default();
+        config.endpoint = endpoint;
+
+        let mut client = OllamaClient::new(&config);
+        let response = client.chat_complete("hello").await;
+        assert_eq!(response, "hello there");
+        assert_eq!(client.history.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_chat_complete_parse_error() {
+        let endpoint = serve_once("200 OK", "not-json", "application/json").await;
+        let mut config = LlmConfig::default();
+        config.endpoint = endpoint;
+
+        let mut client = OllamaClient::new(&config);
+        let response = client.chat_complete("hello").await;
+        assert_eq!(response, "I'm having trouble understanding the response.");
+        assert_eq!(client.history.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_chat_complete_send_error() {
+        let mut config = LlmConfig::default();
+        config.endpoint = "http://127.0.0.1:1".to_string();
+        config.timeout_secs = 1;
+
+        let mut client = OllamaClient::new(&config);
+        let response = client.chat_complete("hello").await;
+        assert_eq!(response, "I'm having trouble connecting right now.");
+        assert_eq!(client.history.len(), 2);
+    }
+
+    #[test]
+    fn test_add_assistant_response_and_clear_history() {
+        let config = LlmConfig::default();
+        let mut client = OllamaClient::new(&config);
+        client.add_assistant_response("hello");
+        assert_eq!(client.history.len(), 1);
+        client.clear_history();
+        assert!(client.history.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_health_check_success() {
+        let endpoint = serve_once("200 OK", "{}", "application/json").await;
+        let mut config = LlmConfig::default();
+        config.endpoint = endpoint;
+
+        let client = OllamaClient::new(&config);
+        assert!(client.health_check().await);
+    }
+
+    #[tokio::test]
+    async fn test_health_check_failure() {
+        let mut config = LlmConfig::default();
+        config.endpoint = "http://127.0.0.1:1".to_string();
+        config.timeout_secs = 1;
+
+        let client = OllamaClient::new(&config);
+        assert!(!client.health_check().await);
     }
 }

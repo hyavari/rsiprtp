@@ -1,9 +1,12 @@
-//! SIP Digest Authentication per RFC 2617 and RFC 3261.
+//! SIP Digest Authentication per RFC 2617, RFC 3261, and RFC 7616.
 //!
 //! Provides parsing of WWW-Authenticate/Proxy-Authenticate headers
 //! and generation of Authorization/Proxy-Authorization headers.
+//!
+//! Supports MD5 (legacy) and SHA-256 (RFC 7616) algorithms.
 
 use rand::Rng;
+use sha2::{Digest, Sha256};
 use std::fmt;
 use thiserror::Error;
 
@@ -57,6 +60,10 @@ pub enum Algorithm {
     Md5,
     /// MD5-sess algorithm.
     Md5Sess,
+    /// SHA-256 algorithm (RFC 7616).
+    Sha256,
+    /// SHA-256-sess algorithm (RFC 7616).
+    Sha256Sess,
 }
 
 impl fmt::Display for Algorithm {
@@ -64,6 +71,8 @@ impl fmt::Display for Algorithm {
         match self {
             Algorithm::Md5 => write!(f, "MD5"),
             Algorithm::Md5Sess => write!(f, "MD5-sess"),
+            Algorithm::Sha256 => write!(f, "SHA-256"),
+            Algorithm::Sha256Sess => write!(f, "SHA-256-sess"),
         }
     }
 }
@@ -124,6 +133,8 @@ impl DigestChallenge {
         let algorithm = match params.get("algorithm").map(|s| s.as_str()) {
             None | Some("MD5") => Algorithm::Md5,
             Some("MD5-sess") => Algorithm::Md5Sess,
+            Some("SHA-256") => Algorithm::Sha256,
+            Some("SHA-256-sess") => Algorithm::Sha256Sess,
             Some(other) => return Err(DigestAuthError::UnsupportedAlgorithm(other.to_string())),
         };
 
@@ -203,6 +214,13 @@ impl DigestResponse {
         uri: &str,
         body: Option<&[u8]>,
     ) -> Result<Self, DigestAuthError> {
+        if challenge.realm.is_empty() {
+            return Err(DigestAuthError::MissingField("realm"));
+        }
+        if challenge.nonce.is_empty() {
+            return Err(DigestAuthError::MissingField("nonce"));
+        }
+
         let qop = challenge.qop;
         let (cnonce, nc) = if qop.is_some() {
             (Some(generate_cnonce()), Some(1u32))
@@ -269,6 +287,33 @@ impl DigestResponse {
     }
 }
 
+/// Hash a string using MD5.
+fn hash_md5(data: &str) -> String {
+    hex::encode(md5::compute(data).0)
+}
+
+/// Hash bytes using MD5.
+fn hash_md5_bytes(data: &[u8]) -> String {
+    hex::encode(md5::compute(data).0)
+}
+
+/// Hash a string using SHA-256.
+fn hash_sha256(data: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+/// Hash bytes using SHA-256.
+fn hash_sha256_bytes(data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hex::encode(hasher.finalize())
+}
+
+type HashStrFn = fn(&str) -> String;
+type HashBytesFn = fn(&[u8]) -> String;
+
 /// Compute the digest response hash.
 #[allow(clippy::too_many_arguments)]
 fn compute_digest(
@@ -284,54 +329,50 @@ fn compute_digest(
     nc: Option<u32>,
     body: Option<&[u8]>,
 ) -> String {
-    // HA1 = MD5(username:realm:password)
+    // Select hash function based on algorithm
+    let (hash_str, hash_bytes): (HashStrFn, HashBytesFn) = match algorithm {
+        Algorithm::Md5 | Algorithm::Md5Sess => (hash_md5, hash_md5_bytes),
+        Algorithm::Sha256 | Algorithm::Sha256Sess => (hash_sha256, hash_sha256_bytes),
+    };
+
+    // HA1 = H(username:realm:password)
     let ha1 = {
-        let digest = md5::compute(format!("{}:{}:{}", username, realm, password));
-        let ha1_base = hex::encode(digest.0);
+        let ha1_base = hash_str(&format!("{}:{}:{}", username, realm, password));
 
         match algorithm {
-            Algorithm::Md5 => ha1_base,
-            Algorithm::Md5Sess => {
-                // HA1 = MD5(MD5(username:realm:password):nonce:cnonce)
+            Algorithm::Md5 | Algorithm::Sha256 => ha1_base,
+            Algorithm::Md5Sess | Algorithm::Sha256Sess => {
+                // HA1 = H(H(username:realm:password):nonce:cnonce)
                 let cnonce = cnonce.unwrap_or("");
-                let digest = md5::compute(format!("{}:{}:{}", ha1_base, nonce, cnonce));
-                hex::encode(digest.0)
+                hash_str(&format!("{}:{}:{}", ha1_base, nonce, cnonce))
             }
         }
     };
 
-    // HA2 = MD5(method:uri) or MD5(method:uri:MD5(body)) for auth-int
+    // HA2 = H(method:uri) or H(method:uri:H(body)) for auth-int
     let ha2 = match qop {
         Some(Qop::AuthInt) => {
             let body_hash = if let Some(body) = body {
-                hex::encode(md5::compute(body).0)
+                hash_bytes(body)
             } else {
-                hex::encode(md5::compute(b"").0)
+                hash_bytes(b"")
             };
-            let digest = md5::compute(format!("{}:{}:{}", method, uri, body_hash));
-            hex::encode(digest.0)
+            hash_str(&format!("{}:{}:{}", method, uri, body_hash))
         }
-        _ => {
-            let digest = md5::compute(format!("{}:{}", method, uri));
-            hex::encode(digest.0)
-        }
+        _ => hash_str(&format!("{}:{}", method, uri)),
     };
 
-    // Response = MD5(HA1:nonce:HA2) or MD5(HA1:nonce:nc:cnonce:qop:HA2)
+    // Response = H(HA1:nonce:HA2) or H(HA1:nonce:nc:cnonce:qop:HA2)
     match qop {
         Some(qop) if qop != Qop::None => {
             let cnonce = cnonce.unwrap_or("");
             let nc = nc.unwrap_or(1);
-            let digest = md5::compute(format!(
+            hash_str(&format!(
                 "{}:{}:{:08x}:{}:{}:{}",
                 ha1, nonce, nc, cnonce, qop, ha2
-            ));
-            hex::encode(digest.0)
+            ))
         }
-        _ => {
-            let digest = md5::compute(format!("{}:{}:{}", ha1, nonce, ha2));
-            hex::encode(digest.0)
-        }
+        _ => hash_str(&format!("{}:{}:{}", ha1, nonce, ha2)),
     }
 }
 
@@ -400,6 +441,13 @@ mod tests {
         assert_eq!(challenge.nonce, "1234567890");
         assert_eq!(challenge.algorithm, Algorithm::Md5);
         assert!(challenge.opaque.is_none());
+    }
+
+    #[test]
+    fn test_parse_auth_params_trailing_commas() {
+        let params = parse_auth_params("realm=\"test\", nonce=\"abc\",   , ").unwrap();
+        assert_eq!(params.get("realm"), Some(&"test".to_string()));
+        assert_eq!(params.get("nonce"), Some(&"abc".to_string()));
     }
 
     #[test]
@@ -525,6 +573,27 @@ mod tests {
     }
 
     #[test]
+    fn test_digest_response_with_qop_missing_cnonce_nc() {
+        let response = DigestResponse {
+            username: "alice".to_string(),
+            realm: "asterisk".to_string(),
+            nonce: "abc123".to_string(),
+            uri: "sip:asterisk@192.168.1.1".to_string(),
+            response: "deadbeef".to_string(),
+            algorithm: Algorithm::Md5,
+            opaque: None,
+            qop: Some(Qop::Auth),
+            cnonce: None,
+            nc: None,
+        };
+
+        let header = response.to_header_value();
+        assert!(header.contains("qop=auth"));
+        assert!(!header.contains("cnonce=\""));
+        assert!(!header.contains("nc="));
+    }
+
+    #[test]
     fn test_missing_digest_scheme() {
         let result = DigestChallenge::parse("Basic realm=\"test\"");
         assert!(result.is_err());
@@ -561,6 +630,97 @@ mod tests {
     fn test_algorithm_display() {
         assert_eq!(format!("{}", Algorithm::Md5), "MD5");
         assert_eq!(format!("{}", Algorithm::Md5Sess), "MD5-sess");
+        assert_eq!(format!("{}", Algorithm::Sha256), "SHA-256");
+        assert_eq!(format!("{}", Algorithm::Sha256Sess), "SHA-256-sess");
+    }
+
+    #[test]
+    fn test_parse_sha256_algorithm() {
+        let challenge =
+            DigestChallenge::parse(r#"Digest realm="test", nonce="abc", algorithm=SHA-256"#)
+                .unwrap();
+        assert_eq!(challenge.algorithm, Algorithm::Sha256);
+    }
+
+    #[test]
+    fn test_parse_sha256_sess_algorithm() {
+        let challenge =
+            DigestChallenge::parse(r#"Digest realm="test", nonce="abc", algorithm=SHA-256-sess"#)
+                .unwrap();
+        assert_eq!(challenge.algorithm, Algorithm::Sha256Sess);
+    }
+
+    #[test]
+    fn test_compute_digest_sha256() {
+        // SHA-256 should produce a 64-char hex string (256 bits = 32 bytes = 64 hex chars)
+        let response = compute_digest(
+            "user",
+            "password",
+            "realm",
+            "REGISTER",
+            "sip:example.com",
+            "servernonce",
+            Algorithm::Sha256,
+            Some(Qop::Auth),
+            Some("clientnonce"),
+            Some(1),
+            None,
+        );
+
+        assert_eq!(response.len(), 64);
+        assert!(response.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_compute_digest_sha256_sess() {
+        let response = compute_digest(
+            "user",
+            "password",
+            "realm",
+            "REGISTER",
+            "sip:example.com",
+            "servernonce",
+            Algorithm::Sha256Sess,
+            Some(Qop::Auth),
+            Some("clientnonce"),
+            Some(1),
+            None,
+        );
+
+        assert_eq!(response.len(), 64);
+        assert!(response.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_sha256_response_generation() {
+        // Test full response generation with SHA-256
+        let challenge = DigestChallenge {
+            realm: "sip.example.com".to_string(),
+            nonce: "testnonce123".to_string(),
+            opaque: None,
+            stale: false,
+            algorithm: Algorithm::Sha256,
+            qop: Some(Qop::Auth),
+            domain: None,
+        };
+
+        let creds = DigestCredentials::new("testuser", "testpassword");
+        let response = DigestResponse::from_challenge(
+            &challenge,
+            &creds,
+            "REGISTER",
+            "sip:sip.example.com",
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(response.algorithm, Algorithm::Sha256);
+        // SHA-256 response should be 64 hex chars
+        assert_eq!(response.response.len(), 64);
+
+        // Verify the header contains algorithm=SHA-256
+        let header = response.to_header_value();
+        assert!(header.contains("algorithm=SHA-256"));
     }
 
     #[test]
@@ -582,10 +742,68 @@ mod tests {
     fn test_parse_unsupported_algorithm() {
         let result =
             DigestChallenge::parse(r#"Digest realm="test", nonce="abc", algorithm=SHA256"#);
-        assert!(matches!(
-            result,
-            Err(DigestAuthError::UnsupportedAlgorithm(_))
-        ));
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("unsupported algorithm"));
+    }
+
+    #[test]
+    fn test_parse_invalid_params_missing_equals() {
+        let result = DigestChallenge::parse(r#"Digest realm"test", nonce="abc""#);
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("missing required field: realm"));
+    }
+
+    #[test]
+    fn test_parse_invalid_params_unterminated_quote() {
+        let result = DigestChallenge::parse(r#"Digest realm="test, nonce=abc"#);
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("unterminated quoted string"));
+    }
+
+    #[test]
+    fn test_response_missing_realm() {
+        let challenge = DigestChallenge {
+            realm: String::new(),
+            nonce: "abc".to_string(),
+            opaque: None,
+            stale: false,
+            algorithm: Algorithm::Md5,
+            qop: None,
+            domain: None,
+        };
+        let credentials = DigestCredentials::new("user", "pass");
+        let err = DigestResponse::from_challenge(
+            &challenge,
+            &credentials,
+            "REGISTER",
+            "sip:example.com",
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("missing required field: realm"));
+    }
+
+    #[test]
+    fn test_response_missing_nonce() {
+        let challenge = DigestChallenge {
+            realm: "test".to_string(),
+            nonce: String::new(),
+            opaque: None,
+            stale: false,
+            algorithm: Algorithm::Md5,
+            qop: None,
+            domain: None,
+        };
+        let credentials = DigestCredentials::new("user", "pass");
+        let err = DigestResponse::from_challenge(
+            &challenge,
+            &credentials,
+            "REGISTER",
+            "sip:example.com",
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("missing required field: nonce"));
     }
 
     #[test]
@@ -673,6 +891,27 @@ mod tests {
 
         // Verify it produces a 32-char hex string
         assert_eq!(response.len(), 32);
+        assert!(response.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_compute_digest_auth_int_sha256_with_body() {
+        let body = b"test body content";
+        let response = compute_digest(
+            "user",
+            "password",
+            "realm",
+            "INVITE",
+            "sip:example.com",
+            "nonce123",
+            Algorithm::Sha256,
+            Some(Qop::AuthInt),
+            Some("cnonce"),
+            Some(1),
+            Some(body),
+        );
+
+        assert_eq!(response.len(), 64);
         assert!(response.chars().all(|c| c.is_ascii_hexdigit()));
     }
 

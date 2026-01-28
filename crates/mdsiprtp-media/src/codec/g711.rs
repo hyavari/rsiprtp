@@ -174,7 +174,7 @@ mod tests {
         // G.711 is lossy, but should be close
         for (original, decoded) in samples.iter().zip(decoded.iter()) {
             let error = (*original as i32 - *decoded as i32).abs();
-            assert!(error < 500, "Error too large: {} vs {}", original, decoded);
+            assert!(error < 500);
         }
     }
 
@@ -188,7 +188,7 @@ mod tests {
 
         for (original, decoded) in samples.iter().zip(decoded.iter()) {
             let error = (*original as i32 - *decoded as i32).abs();
-            assert!(error < 500, "Error too large: {} vs {}", original, decoded);
+            assert!(error < 500);
         }
     }
 
@@ -207,6 +207,41 @@ mod tests {
     }
 
     #[test]
+    fn test_variant_and_name() {
+        let codec_mu = G711Codec::pcmu();
+        let codec_a = G711Codec::pcma();
+
+        assert_eq!(codec_mu.variant(), G711Variant::MuLaw);
+        assert_eq!(codec_a.variant(), G711Variant::ALaw);
+        assert_eq!(G711Variant::MuLaw.name(), "PCMU");
+        assert_eq!(G711Variant::ALaw.name(), "PCMA");
+    }
+
+    #[test]
+    fn test_encode_decode_single_sample() {
+        let codec_mu = G711Codec::pcmu();
+        let codec_a = G711Codec::pcma();
+
+        let sample = -12345;
+        let encoded_mu = codec_mu.encode_sample(sample);
+        let decoded_mu = codec_mu.decode_sample(encoded_mu);
+        let encoded_a = codec_a.encode_sample(sample);
+        let decoded_a = codec_a.decode_sample(encoded_a);
+
+        assert!((sample as i32 - decoded_mu as i32).abs() < 500);
+        assert!((sample as i32 - decoded_a as i32).abs() < 500);
+    }
+
+    #[test]
+    fn test_silence_frame_values() {
+        let mu = silence_frame(G711Variant::MuLaw, 3);
+        let a = silence_frame(G711Variant::ALaw, 2);
+
+        assert_eq!(mu, vec![silence_byte(G711Variant::MuLaw); 3]);
+        assert_eq!(a, vec![silence_byte(G711Variant::ALaw); 2]);
+    }
+
+    #[test]
     fn test_silence() {
         let codec_mu = G711Codec::pcmu();
         let codec_a = G711Codec::pcma();
@@ -215,16 +250,8 @@ mod tests {
         let mu_silence = codec_mu.decode_sample(silence_byte(G711Variant::MuLaw));
         let a_silence = codec_a.decode_sample(silence_byte(G711Variant::ALaw));
 
-        assert!(
-            mu_silence.abs() < 10,
-            "Mu-law silence not quiet: {}",
-            mu_silence
-        );
-        assert!(
-            a_silence.abs() < 10,
-            "A-law silence not quiet: {}",
-            a_silence
-        );
+        assert!(mu_silence.abs() < 10);
+        assert!(a_silence.abs() < 10);
     }
 
     #[test]
@@ -245,14 +272,7 @@ mod tests {
             let decoded = codec.decode_sample(encoded);
             // G.711 quantization allows some error
             let error = (value as i32 - decoded as i32).abs();
-            assert!(
-                error < 1000,
-                "PCMU boundary {} -> {} -> {}, error = {}",
-                value,
-                encoded,
-                decoded,
-                error
-            );
+            assert!(error < 1000);
         }
     }
 
@@ -266,14 +286,7 @@ mod tests {
             let encoded = codec.encode_sample(value);
             let decoded = codec.decode_sample(encoded);
             let error = (value as i32 - decoded as i32).abs();
-            assert!(
-                error < 1000,
-                "PCMA boundary {} -> {} -> {}, error = {}",
-                value,
-                encoded,
-                decoded,
-                error
-            );
+            assert!(error < 1000);
         }
     }
 
@@ -287,12 +300,7 @@ mod tests {
             let encoded = codec.encode_sample(value);
             let decoded = codec.decode_sample(encoded) as i32;
             // Allow small non-monotonicity due to quantization
-            assert!(
-                decoded >= last_decoded - 200,
-                "Non-monotonic: {} -> {}",
-                last_decoded,
-                decoded
-            );
+            assert!(decoded >= last_decoded - 200);
             last_decoded = decoded;
         }
     }
@@ -305,12 +313,7 @@ mod tests {
         for value in (-32000i16..=32000).step_by(100) {
             let encoded = codec.encode_sample(value);
             let decoded = codec.decode_sample(encoded) as i32;
-            assert!(
-                decoded >= last_decoded - 200,
-                "Non-monotonic: {} -> {}",
-                last_decoded,
-                decoded
-            );
+            assert!(decoded >= last_decoded - 200);
             last_decoded = decoded;
         }
     }
@@ -378,9 +381,8 @@ mod tests {
         for byte in 0u8..=255 {
             let decoded_mu = codec_mu.decode_sample(byte);
             let decoded_a = codec_a.decode_sample(byte);
-            // Just verify they're in valid i16 range (which they always will be)
-            assert!(decoded_mu >= i16::MIN && decoded_mu <= i16::MAX);
-            assert!(decoded_a >= i16::MIN && decoded_a <= i16::MAX);
+            let _ = decoded_mu;
+            let _ = decoded_a;
         }
     }
 

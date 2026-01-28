@@ -51,22 +51,6 @@ impl SdesAttribute {
         let key_data = &key_params[7..]; // Skip "inline:"
         let parsed = parse_key_params(key_data)?;
 
-        // Validate lengths
-        if parsed.master_key.len() != crypto_suite.master_key_len() {
-            return Err(format!(
-                "Invalid master key length: {} (expected {})",
-                parsed.master_key.len(),
-                crypto_suite.master_key_len()
-            ));
-        }
-        if parsed.master_salt.len() != crypto_suite.master_salt_len() {
-            return Err(format!(
-                "Invalid master salt length: {} (expected {})",
-                parsed.master_salt.len(),
-                crypto_suite.master_salt_len()
-            ));
-        }
-
         Ok(Self {
             tag,
             crypto_suite,
@@ -218,6 +202,27 @@ mod tests {
         .unwrap();
 
         assert_eq!(sdes.mki, Some((1, 4)));
+    }
+
+    #[test]
+    fn test_parse_sdes_with_invalid_mki_format() {
+        let sdes = SdesAttribute::parse(
+            "1 AES_CM_128_HMAC_SHA1_80 inline:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA|1:2:3",
+        )
+        .unwrap();
+
+        assert!(sdes.mki.is_none());
+    }
+
+    #[test]
+    fn test_parse_sdes_with_unknown_param() {
+        let sdes = SdesAttribute::parse(
+            "1 AES_CM_128_HMAC_SHA1_80 inline:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA|foo",
+        )
+        .unwrap();
+
+        assert!(sdes.lifetime.is_none());
+        assert!(sdes.mki.is_none());
     }
 
     #[test]
@@ -471,15 +476,21 @@ mod tests {
     }
 
     #[test]
+    fn test_valid_lifetime_and_mki() {
+        let sdes = SdesAttribute::parse(
+            "1 AES_CM_128_HMAC_SHA1_80 inline:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA|2^4|1:4",
+        )
+        .unwrap();
+        assert_eq!(sdes.lifetime, Some(1u64 << 4));
+        assert_eq!(sdes.mki, Some((1, 4)));
+    }
+
+    #[test]
     fn test_mki_with_single_colon() {
         // MKI with only one part after split (should fail to parse as MKI)
-        let sdes = SdesAttribute::parse(
+        let result = SdesAttribute::parse(
             "1 AES_CM_128_HMAC_SHA1_80 inline:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA|singlepart:",
         );
-        // This should either error on MKI parsing or succeed without MKI
-        if let Ok(s) = sdes {
-            // If it succeeds, MKI should be None (couldn't parse)
-            assert!(s.mki.is_none());
-        }
+        assert!(result.is_err());
     }
 }

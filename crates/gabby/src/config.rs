@@ -83,6 +83,121 @@ impl GabbyConfig {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Once;
+
+    fn init_tracing() {
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            let _ = tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::DEBUG)
+                .with_test_writer()
+                .try_init();
+        });
+    }
+
+    fn valid_config() -> GabbyConfig {
+        GabbyConfig::default()
+    }
+
+    #[test]
+    fn test_load_or_default_missing_file() {
+        init_tracing();
+        let path = std::env::temp_dir().join("gabby_missing_config.toml");
+        std::fs::remove_file(&path).ok();
+
+        let config = GabbyConfig::load_or_default(&path).expect("load defaults");
+        assert_eq!(config.server.sip_port, default_sip_port());
+    }
+
+    #[test]
+    fn test_load_or_default_existing_file() {
+        let path = std::env::temp_dir().join("gabby_existing_config.toml");
+        let content = r#"
+[server]
+sip_port = 5060
+rtp_port_start = 4000
+
+[llm]
+temperature = 0.7
+max_tokens = 128
+"#;
+        std::fs::write(&path, content).expect("write temp config");
+
+        let config = GabbyConfig::load_or_default(&path).expect("load config");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(config.server.sip_port, 5060);
+        assert_eq!(config.server.rtp_port_start, 4000);
+    }
+
+    #[test]
+    fn test_validate_rejects_invalid_values() {
+        let mut config = valid_config();
+
+        config.vad.silence_threshold = -0.1;
+        assert!(config.validate().is_err());
+
+        config.vad.silence_threshold = 1.1;
+        assert!(config.validate().is_err());
+
+        config = valid_config();
+        config.server.sip_port = 0;
+        assert!(config.validate().is_err());
+
+        config = valid_config();
+        config.server.rtp_port_start = 0;
+        assert!(config.validate().is_err());
+
+        config = valid_config();
+        config.llm.temperature = -0.1;
+        assert!(config.validate().is_err());
+
+        config.llm.temperature = 2.1;
+        assert!(config.validate().is_err());
+
+        config = valid_config();
+        config.llm.max_tokens = 0;
+        assert!(config.validate().is_err());
+
+        config = valid_config();
+        config.vad.silence_duration_ms = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_from_file_read_error() {
+        let dir_path = std::env::temp_dir();
+        let err = GabbyConfig::from_file(&dir_path).unwrap_err();
+        assert!(err.to_string().contains("Failed to read config file"));
+    }
+
+    #[test]
+    fn test_load_or_default_parse_error() {
+        let path = std::env::temp_dir().join("gabby_invalid_config.toml");
+        std::fs::write(&path, "not = [toml").expect("write invalid config");
+
+        let err = GabbyConfig::load_or_default(&path).unwrap_err();
+        std::fs::remove_file(&path).ok();
+        assert!(err.to_string().contains("Failed to parse config"));
+    }
+
+    #[test]
+    fn test_load_or_default_validation_error() {
+        let path = std::env::temp_dir().join("gabby_invalid_values.toml");
+        let content = r#"
+[server]
+sip_port = 0
+rtp_port_start = 4000
+"#;
+        std::fs::write(&path, content).expect("write invalid config");
+        let err = GabbyConfig::load_or_default(&path).unwrap_err();
+        std::fs::remove_file(&path).ok();
+        assert!(err.to_string().contains("Invalid configuration"));
+    }
+}
+
 /// Server configuration for SIP/RTP.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ServerConfig {

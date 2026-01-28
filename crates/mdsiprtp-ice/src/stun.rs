@@ -12,6 +12,9 @@ use tokio::net::UdpSocket;
 use tokio::time::timeout;
 use tracing::{debug, trace};
 
+#[cfg(test)]
+use std::sync::atomic::{AtomicU64, Ordering};
+
 /// STUN magic cookie (RFC 5389).
 const MAGIC_COOKIE: u32 = 0x2112A442;
 
@@ -47,6 +50,113 @@ pub enum StunError {
 
     #[error("No mapped address in response")]
     NoMappedAddress,
+}
+
+#[cfg(test)]
+static FORCE_LOCAL_ADDR_ERROR: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static FORCE_SEND_ERROR: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static FORCE_RECV_ERROR: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(test)]
+fn force_local_addr_error_once() {
+    FORCE_LOCAL_ADDR_ERROR.store(current_thread_id(), Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn force_send_error_once() {
+    FORCE_SEND_ERROR.store(current_thread_id(), Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn force_recv_error_once() {
+    FORCE_RECV_ERROR.store(current_thread_id(), Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn take_forced_error(flag: &AtomicU64, message: &str) -> Option<std::io::Error> {
+    let current = current_thread_id();
+    if flag.load(Ordering::SeqCst) == current {
+        let _ = flag.compare_exchange(current, 0, Ordering::SeqCst, Ordering::SeqCst);
+        Some(std::io::Error::new(std::io::ErrorKind::Other, message))
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+fn current_thread_id() -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::thread::current().id().hash(&mut hasher);
+    let id = hasher.finish();
+    normalize_thread_id(id)
+}
+
+#[cfg(test)]
+fn normalize_thread_id(id: u64) -> u64 {
+    if id == 0 {
+        1
+    } else {
+        id
+    }
+}
+
+fn socket_local_addr(socket: &UdpSocket) -> Result<SocketAddr, StunError> {
+    socket_local_addr_inner(socket).map_err(StunError::Io)
+}
+
+fn socket_local_addr_inner(socket: &UdpSocket) -> Result<SocketAddr, std::io::Error> {
+    #[cfg(test)]
+    if let Some(err) = take_forced_error(&FORCE_LOCAL_ADDR_ERROR, "forced local_addr error") {
+        return Err(err);
+    }
+    socket.local_addr()
+}
+
+async fn socket_send_to(
+    socket: &UdpSocket,
+    data: &[u8],
+    addr: SocketAddr,
+) -> Result<(), StunError> {
+    socket_send_to_inner(socket, data, addr)
+        .await
+        .map(|_| ())
+        .map_err(StunError::Io)
+}
+
+async fn socket_send_to_inner(
+    socket: &UdpSocket,
+    data: &[u8],
+    addr: SocketAddr,
+) -> Result<usize, std::io::Error> {
+    #[cfg(test)]
+    if let Some(err) = take_forced_error(&FORCE_SEND_ERROR, "forced send_to error") {
+        return Err(err);
+    }
+    socket.send_to(data, addr).await
+}
+
+async fn socket_recv_from(
+    socket: &UdpSocket,
+    buf: &mut [u8],
+) -> Result<(usize, SocketAddr), StunError> {
+    socket_recv_from_inner(socket, buf)
+        .await
+        .map_err(StunError::Io)
+}
+
+async fn socket_recv_from_inner(
+    socket: &UdpSocket,
+    buf: &mut [u8],
+) -> Result<(usize, SocketAddr), std::io::Error> {
+    #[cfg(test)]
+    if let Some(err) = take_forced_error(&FORCE_RECV_ERROR, "forced recv_from error") {
+        return Err(err);
+    }
+    socket.recv_from(buf).await
 }
 
 /// Well-known STUN servers.
@@ -93,7 +203,8 @@ impl StunClient {
     /// Create a new STUN client bound to a specific address.
     pub async fn bind(addr: &str) -> Result<Self, StunError> {
         let socket = UdpSocket::bind(addr).await?;
-        debug!("STUN client bound to {}", socket.local_addr()?);
+        let local_addr = socket_local_addr(&socket)?;
+        debug!("STUN client bound to {}", local_addr);
 
         Ok(Self {
             socket,
@@ -114,7 +225,7 @@ impl StunClient {
 
     /// Get the local address of the socket.
     pub fn local_addr(&self) -> Result<SocketAddr, StunError> {
-        Ok(self.socket.local_addr()?)
+        socket_local_addr(&self.socket)
     }
 
     /// Send a STUN Binding Request and return the mapped address.
@@ -133,12 +244,13 @@ impl StunClient {
             }
 
             // Send request
-            self.socket.send_to(&request, server.addr).await?;
+            socket_send_to(&self.socket, &request, server.addr).await?;
 
             // Wait for response with timeout
             let mut buf = vec![0u8; 1024];
-            match timeout(self.timeout, self.socket.recv_from(&mut buf)).await {
-                Ok(Ok((len, from))) => {
+            match timeout(self.timeout, socket_recv_from(&self.socket, &mut buf)).await {
+                Ok(result) => {
+                    let (len, from) = result?;
                     trace!("Received {} bytes from {}", len, from);
 
                     // Verify it's from the server
@@ -158,7 +270,6 @@ impl StunClient {
                         }
                     }
                 }
-                Ok(Err(e)) => return Err(StunError::Io(e)),
                 Err(_) => {
                     if attempt == self.retries - 1 {
                         return Err(StunError::Timeout);
@@ -370,6 +481,58 @@ fn parse_error_response(attrs: &[u8]) -> StunError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Once;
+
+    fn build_xor_mapped_response(transaction_id: &[u8; 12], addr: std::net::SocketAddrV4) -> Bytes {
+        let mut response = BytesMut::with_capacity(32);
+        let xor_port = addr.port() ^ ((MAGIC_COOKIE >> 16) as u16);
+        let xor_ip = u32::from(*addr.ip()) ^ MAGIC_COOKIE;
+
+        response.put_u16(BINDING_RESPONSE);
+        response.put_u16(12); // Single XOR-MAPPED-ADDRESS attribute
+        response.put_u32(MAGIC_COOKIE);
+        response.put_slice(transaction_id);
+        response.put_u16(ATTR_XOR_MAPPED_ADDRESS);
+        response.put_u16(8);
+        response.put_u8(0x00);
+        response.put_u8(AF_IPV4);
+        response.put_u16(xor_port);
+        response.put_slice(&xor_ip.to_be_bytes());
+
+        response.freeze()
+    }
+
+    fn init_tracing() {
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            let _ = tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::TRACE)
+                .with_test_writer()
+                .try_init();
+        });
+    }
+
+    #[test]
+    fn test_normalize_thread_id_branches() {
+        assert_eq!(normalize_thread_id(0), 1);
+        assert_eq!(normalize_thread_id(123), 123);
+    }
+
+    fn assert_stun_err_contains<T>(result: Result<T, StunError>, needle: &str) {
+        assert!(result.is_err());
+        let err = result.err().unwrap();
+        assert!(format!("{err:?}").contains(needle));
+    }
+
+    fn error_response_matches(err: &StunError, code: u16, reason: &str) -> bool {
+        match err {
+            StunError::ErrorResponse {
+                code: err_code,
+                reason: err_reason,
+            } => *err_code == code && err_reason == reason,
+            _ => false,
+        }
+    }
 
     // StunError tests
     #[test]
@@ -611,7 +774,7 @@ mod tests {
         let data = [0u8; 10]; // Less than 20 bytes
         let txn_id = [0u8; 12];
         let result = parse_binding_response(&data, &txn_id);
-        assert!(matches!(result, Err(StunError::InvalidResponse(_))));
+        assert_stun_err_contains(result, "InvalidResponse");
     }
 
     #[test]
@@ -623,7 +786,7 @@ mod tests {
         response.put_slice(&[0u8; 12]);
 
         let result = parse_binding_response(&response, &[0u8; 12]);
-        assert!(matches!(result, Err(StunError::InvalidResponse(_))));
+        assert_stun_err_contains(result, "InvalidResponse");
     }
 
     #[test]
@@ -635,7 +798,7 @@ mod tests {
         response.put_slice(&[0u8; 12]);
 
         let result = parse_binding_response(&response, &[0u8; 12]);
-        assert!(matches!(result, Err(StunError::InvalidResponse(_))));
+        assert_stun_err_contains(result, "InvalidResponse");
     }
 
     #[test]
@@ -647,7 +810,7 @@ mod tests {
         response.put_slice(&[0x11u8; 12]); // Different txn ID
 
         let result = parse_binding_response(&response, &[0x22u8; 12]);
-        assert!(matches!(result, Err(StunError::InvalidResponse(_))));
+        assert_stun_err_contains(result, "InvalidResponse");
     }
 
     #[test]
@@ -665,7 +828,7 @@ mod tests {
         response.put_slice(b"test");
 
         let result = parse_binding_response(&response, &txn_id);
-        assert!(matches!(result, Err(StunError::NoMappedAddress)));
+        assert_stun_err_contains(result, "NoMappedAddress");
     }
 
     #[test]
@@ -692,6 +855,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_parse_binding_response_truncated_padding() {
+        let txn_id = [0x11u8; 12];
+        let mut response = BytesMut::new();
+        response.put_u16(BINDING_RESPONSE);
+        response.put_u16(5);
+        response.put_u32(MAGIC_COOKIE);
+        response.put_slice(&txn_id);
+        response.put_u16(ATTR_SOFTWARE);
+        response.put_u16(1);
+        response.put_u8(0xAB);
+
+        let result = parse_binding_response(&response, &txn_id);
+        assert_stun_err_contains(result, "NoMappedAddress");
+    }
+
     // Parse error response tests
     #[test]
     fn test_parse_error_response() {
@@ -704,13 +883,31 @@ mod tests {
         attrs.put_slice(b"Auth"); // Reason
 
         let err = parse_error_response(&attrs);
-        match err {
-            StunError::ErrorResponse { code, reason } => {
-                assert_eq!(code, 401);
-                assert_eq!(reason, "Auth");
-            }
-            _ => panic!("Expected ErrorResponse"),
-        }
+        assert!(error_response_matches(&err, 401, "Auth"));
+    }
+
+    #[test]
+    fn test_parse_error_response_error_code_parsed() {
+        let mut attrs = BytesMut::new();
+        attrs.put_u16(ATTR_ERROR_CODE);
+        attrs.put_u16(4); // Just header, no reason
+        attrs.put_u16(0); // Reserved
+        attrs.put_u8(4); // Class
+        attrs.put_u8(1); // Number -> 401
+
+        let err = parse_error_response(&attrs);
+        assert!(error_response_matches(&err, 401, ""));
+    }
+
+    #[test]
+    fn test_parse_error_response_short_error_code_attr() {
+        let mut attrs = BytesMut::new();
+        attrs.put_u16(ATTR_ERROR_CODE);
+        attrs.put_u16(2); // Too short to include class/number
+        attrs.put_u16(0x1234);
+
+        let err = parse_error_response(&attrs);
+        assert!(error_response_matches(&err, 0, "Unknown error"));
     }
 
     #[test]
@@ -723,25 +920,38 @@ mod tests {
         attrs.put_u8(0); // Number -> 500
 
         let err = parse_error_response(&attrs);
-        match err {
-            StunError::ErrorResponse { code, reason } => {
-                assert_eq!(code, 500);
-                assert!(reason.is_empty());
-            }
-            _ => panic!("Expected ErrorResponse"),
-        }
+        assert!(error_response_matches(&err, 500, ""));
     }
 
     #[test]
     fn test_parse_error_response_no_error_attr() {
         let attrs = [0u8; 0]; // Empty
         let err = parse_error_response(&attrs);
-        match err {
-            StunError::ErrorResponse { code, .. } => {
-                assert_eq!(code, 0);
-            }
-            _ => panic!("Expected ErrorResponse"),
-        }
+        assert!(error_response_matches(&err, 0, "Unknown error"));
+    }
+
+    #[test]
+    fn test_error_response_matches_false() {
+        let err = StunError::Timeout;
+        assert!(!error_response_matches(&err, 401, "Auth"));
+    }
+
+    #[test]
+    fn test_error_response_matches_reason_mismatch() {
+        let err = StunError::ErrorResponse {
+            code: 401,
+            reason: "Auth".to_string(),
+        };
+        assert!(!error_response_matches(&err, 401, "Other"));
+    }
+
+    #[test]
+    fn test_error_response_matches_code_mismatch() {
+        let err = StunError::ErrorResponse {
+            code: 400,
+            reason: "Auth".to_string(),
+        };
+        assert!(!error_response_matches(&err, 401, "Auth"));
     }
 
     // StunClient tests
@@ -764,10 +974,192 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_stun_client_bind_invalid_address() {
+        let client = StunClient::bind("256.256.256.256:0").await;
+        assert_stun_err_contains(client, "Io");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_stun_client_bind_forced_local_addr_error() {
+        force_local_addr_error_once();
+        let client = StunClient::bind("127.0.0.1:0").await;
+        assert_stun_err_contains(client, "Io");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_stun_client_local_addr_forced_error() {
+        let client = StunClient::bind("127.0.0.1:0").await.unwrap();
+        force_local_addr_error_once();
+        let result = client.local_addr();
+        assert_stun_err_contains(result, "Io");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_stun_client_binding_request_forced_send_error() {
+        let client = StunClient::bind("127.0.0.1:0").await.unwrap();
+        force_send_error_once();
+        let result = client
+            .binding_request(StunServer::new("127.0.0.1:3478".parse().unwrap(), "forced"))
+            .await;
+        assert_stun_err_contains(result, "Io");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_stun_client_binding_request_forced_recv_error() {
+        let client = StunClient::bind("127.0.0.1:0").await.unwrap();
+        force_recv_error_once();
+        let result = client
+            .binding_request(StunServer::new("127.0.0.1:3478".parse().unwrap(), "forced"))
+            .await;
+        assert_stun_err_contains(result, "Io");
+    }
+
+    #[tokio::test]
     async fn test_stun_client_set_timeout() {
         let mut client = StunClient::new().await.unwrap();
         client.set_timeout(Duration::from_secs(5));
         assert_eq!(client.timeout, Duration::from_secs(5));
+    }
+
+    #[tokio::test]
+    async fn test_stun_client_binding_request_success_with_retry() {
+        init_tracing();
+        let server_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = server_socket.local_addr().unwrap();
+
+        let server_task = tokio::spawn(async move {
+            let mut buf = [0u8; 1024];
+
+            let (len, client_addr) = server_socket.recv_from(&mut buf).await.unwrap();
+            assert!(len >= 20);
+            let transaction_id: [u8; 12] = buf[8..20].try_into().unwrap();
+            let spoof_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            let spoof_response = build_xor_mapped_response(
+                &transaction_id,
+                std::net::SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 1), 4000),
+            );
+            let _ = spoof_socket.send_to(&spoof_response, client_addr).await;
+
+            let (len, client_addr) = server_socket.recv_from(&mut buf).await.unwrap();
+            assert!(len >= 20);
+            let transaction_id: [u8; 12] = buf[8..20].try_into().unwrap();
+            let mapped_addr = std::net::SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 1), 54321);
+            let response = build_xor_mapped_response(&transaction_id, mapped_addr);
+            server_socket.send_to(&response, client_addr).await.unwrap();
+            mapped_addr
+        });
+
+        let mut client = StunClient::bind("127.0.0.1:0").await.unwrap();
+        client.set_timeout(Duration::from_millis(200));
+        client.set_retries(2);
+
+        let mapped = client
+            .binding_request(StunServer::new(server_addr, "local"))
+            .await
+            .unwrap();
+        let expected = server_task.await.unwrap();
+        assert_eq!(mapped, SocketAddr::V4(expected));
+    }
+
+    #[tokio::test]
+    async fn test_stun_client_binding_request_timeout() {
+        init_tracing();
+        let server_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = server_socket.local_addr().unwrap();
+
+        let mut client = StunClient::bind("127.0.0.1:0").await.unwrap();
+        client.set_timeout(Duration::from_millis(50));
+        client.set_retries(1);
+
+        let result = client
+            .binding_request(StunServer::new(server_addr, "silent"))
+            .await;
+        assert_stun_err_contains(result, "Timeout");
+    }
+
+    #[tokio::test]
+    async fn test_stun_client_binding_request_invalid_response_then_success() {
+        init_tracing();
+        let server_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = server_socket.local_addr().unwrap();
+
+        let server_task = tokio::spawn(async move {
+            let mut buf = [0u8; 1024];
+
+            let (_len, client_addr) = server_socket.recv_from(&mut buf).await.unwrap();
+            let txn_id: [u8; 12] = buf[8..20].try_into().unwrap();
+            let mut bad_response = BytesMut::new();
+            bad_response.put_u16(BINDING_RESPONSE);
+            bad_response.put_u16(0);
+            bad_response.put_u32(0xdead_beef);
+            bad_response.put_slice(&txn_id);
+            let _ = server_socket.send_to(&bad_response, client_addr).await;
+
+            let (_len, client_addr) = server_socket.recv_from(&mut buf).await.unwrap();
+            let txn_id: [u8; 12] = buf[8..20].try_into().unwrap();
+            let mapped_addr = std::net::SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 2), 54321);
+            let response = build_xor_mapped_response(&txn_id, mapped_addr);
+            server_socket.send_to(&response, client_addr).await.unwrap();
+            mapped_addr
+        });
+
+        let mut client = StunClient::bind("127.0.0.1:0").await.unwrap();
+        client.set_timeout(Duration::from_millis(80));
+        client.set_retries(2);
+
+        let mapped = client
+            .binding_request(StunServer::new(server_addr, "local"))
+            .await
+            .unwrap();
+        let expected = server_task.await.unwrap();
+        assert_eq!(mapped, SocketAddr::V4(expected));
+    }
+
+    #[tokio::test]
+    async fn test_stun_client_binding_request_timeout_then_success() {
+        init_tracing();
+        let server_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = server_socket.local_addr().unwrap();
+
+        let server_task = tokio::spawn(async move {
+            let mut buf = [0u8; 1024];
+
+            let (_len, _client_addr) = server_socket.recv_from(&mut buf).await.unwrap();
+
+            let (_len, client_addr) = server_socket.recv_from(&mut buf).await.unwrap();
+            let txn_id: [u8; 12] = buf[8..20].try_into().unwrap();
+            let mapped_addr = std::net::SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 3), 54322);
+            let response = build_xor_mapped_response(&txn_id, mapped_addr);
+            server_socket.send_to(&response, client_addr).await.unwrap();
+            mapped_addr
+        });
+
+        let mut client = StunClient::bind("127.0.0.1:0").await.unwrap();
+        client.set_timeout(Duration::from_millis(50));
+        client.set_retries(2);
+
+        let mapped = client
+            .binding_request(StunServer::new(server_addr, "local"))
+            .await
+            .unwrap();
+        let expected = server_task.await.unwrap();
+        assert_eq!(mapped, SocketAddr::V4(expected));
+    }
+
+    #[tokio::test]
+    async fn test_stun_client_binding_request_zero_retries_timeout() {
+        init_tracing();
+        let server_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = server_socket.local_addr().unwrap();
+
+        let mut client = StunClient::bind("127.0.0.1:0").await.unwrap();
+        client.set_timeout(Duration::from_millis(20));
+        client.set_retries(0);
+
+        let result = client
+            .binding_request(StunServer::new(server_addr, "silent"))
+            .await;
+        assert_stun_err_contains(result, "Timeout");
     }
 
     #[tokio::test]
@@ -795,10 +1187,9 @@ mod tests {
         response.put_u8(20); // Number -> 420
 
         let result = parse_binding_response(&response, &txn_id);
-        assert!(matches!(
-            result,
-            Err(StunError::ErrorResponse { code: 420, .. })
-        ));
+        assert!(result.is_err());
+        let err = result.err().unwrap();
+        assert!(error_response_matches(&err, 420, ""));
     }
 
     #[test]
@@ -812,13 +1203,7 @@ mod tests {
         attrs.put_slice(b"Payment Required"); // Reason
 
         let err = parse_error_response(&attrs);
-        match err {
-            StunError::ErrorResponse { code, reason } => {
-                assert_eq!(code, 402);
-                assert_eq!(reason, "Payment Required");
-            }
-            _ => panic!("Expected ErrorResponse"),
-        }
+        assert!(error_response_matches(&err, 402, "Payment Required"));
     }
 
     #[test]
@@ -839,13 +1224,7 @@ mod tests {
         attrs.put_slice(b"move"); // Reason
 
         let err = parse_error_response(&attrs);
-        match err {
-            StunError::ErrorResponse { code, reason } => {
-                assert_eq!(code, 300);
-                assert_eq!(reason, "move");
-            }
-            _ => panic!("Expected ErrorResponse"),
-        }
+        assert!(error_response_matches(&err, 300, "move"));
     }
 
     #[test]
@@ -858,12 +1237,7 @@ mod tests {
                          // Missing rest of data
 
         let err = parse_error_response(&attrs);
-        match err {
-            StunError::ErrorResponse { code, .. } => {
-                assert_eq!(code, 0); // Should fallback to unknown error
-            }
-            _ => panic!("Expected ErrorResponse"),
-        }
+        assert!(error_response_matches(&err, 0, "Unknown error"));
     }
 
     #[test]
@@ -874,13 +1248,7 @@ mod tests {
         attrs.put_slice(&[0u8; 8]);
 
         let err = parse_error_response(&attrs);
-        match err {
-            StunError::ErrorResponse { code, reason } => {
-                assert_eq!(code, 0);
-                assert_eq!(reason, "Unknown error");
-            }
-            _ => panic!("Expected ErrorResponse"),
-        }
+        assert!(error_response_matches(&err, 0, "Unknown error"));
     }
 
     #[test]
@@ -895,13 +1263,7 @@ mod tests {
         attrs.put_slice(&[0, 0, 0]); // Padding to 4-byte boundary
 
         let err = parse_error_response(&attrs);
-        match err {
-            StunError::ErrorResponse { code, reason } => {
-                assert_eq!(code, 404);
-                assert_eq!(reason, "X");
-            }
-            _ => panic!("Expected ErrorResponse"),
-        }
+        assert!(error_response_matches(&err, 404, "X"));
     }
 
     // Unknown attribute handling tests
@@ -1003,7 +1365,7 @@ mod tests {
         let data = [0u8; 15]; // Less than 20 bytes header
         let txn_id = [0u8; 12];
         let result = parse_binding_response(&data, &txn_id);
-        assert!(matches!(result, Err(StunError::InvalidResponse(_))));
+        assert_stun_err_contains(result, "InvalidResponse");
     }
 
     #[test]
@@ -1018,7 +1380,7 @@ mod tests {
         response.put_slice(&[0u8; 10]);
 
         let result = parse_binding_response(&response, &txn_id);
-        assert!(matches!(result, Err(StunError::InvalidResponse(_))));
+        assert_stun_err_contains(result, "InvalidResponse");
     }
 
     #[test]
@@ -1033,7 +1395,7 @@ mod tests {
         response.put_slice(&[0u8; 3]);
 
         let result = parse_binding_response(&response, &txn_id);
-        assert!(matches!(result, Err(StunError::NoMappedAddress)));
+        assert_stun_err_contains(result, "NoMappedAddress");
     }
 
     #[test]
@@ -1051,7 +1413,7 @@ mod tests {
         response.put_slice(&[0u8; 6]); // Only provide 6
 
         let result = parse_binding_response(&response, &txn_id);
-        assert!(matches!(result, Err(StunError::NoMappedAddress)));
+        assert_stun_err_contains(result, "NoMappedAddress");
     }
 
     #[test]
@@ -1069,7 +1431,7 @@ mod tests {
         response.put_slice(&[0u8; 4]);
 
         let result = parse_binding_response(&response, &txn_id);
-        assert!(matches!(result, Err(StunError::NoMappedAddress)));
+        assert_stun_err_contains(result, "NoMappedAddress");
     }
 
     #[test]
@@ -1082,7 +1444,7 @@ mod tests {
         response.put_slice(&txn_id);
 
         let result = parse_binding_response(&response, &txn_id);
-        assert!(matches!(result, Err(StunError::NoMappedAddress)));
+        assert_stun_err_contains(result, "NoMappedAddress");
     }
 
     #[test]
@@ -1308,7 +1670,7 @@ mod tests {
         response.put_slice(&[0u8; 12]);
 
         let result = parse_binding_response(&response, &[0u8; 12]);
-        assert!(matches!(result, Err(StunError::InvalidResponse(_))));
+        assert_stun_err_contains(result, "InvalidResponse");
     }
 
     // Build request edge cases
@@ -1397,13 +1759,7 @@ mod tests {
         attrs.put_u8(0); // Padding
 
         let err = parse_error_response(&attrs);
-        match err {
-            StunError::ErrorResponse { code, reason } => {
-                assert_eq!(code, 503);
-                assert_eq!(reason, "err");
-            }
-            _ => panic!("Expected ErrorResponse"),
-        }
+        assert!(error_response_matches(&err, 503, "err"));
     }
 
     #[test]
@@ -1439,7 +1795,7 @@ mod tests {
 
         let expected_txn = [0xFFu8; 12];
         let result = parse_binding_response(&response, &expected_txn);
-        assert!(matches!(result, Err(StunError::InvalidResponse(_))));
+        assert_stun_err_contains(result, "InvalidResponse");
     }
 
     #[test]
@@ -1454,6 +1810,6 @@ mod tests {
 
         let expected_txn = [0xAAu8; 12];
         let result = parse_binding_response(&response, &expected_txn);
-        assert!(matches!(result, Err(StunError::InvalidResponse(_))));
+        assert_stun_err_contains(result, "InvalidResponse");
     }
 }

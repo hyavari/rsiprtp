@@ -187,4 +187,116 @@ mod tests {
             VadDecision::SpeechStart
         );
     }
+
+    #[test]
+    fn test_vad_partial_text_stability_increments() {
+        let config = VadConfig::default();
+        let mut vad = VadState::new(&config);
+
+        let speech: Vec<i16> = (0..160)
+            .map(|i| ((i as f32 * 0.1).sin() * 5000.0) as i16)
+            .collect();
+
+        assert_eq!(
+            vad.process(&speech, Some("hello")),
+            VadDecision::SpeechStart
+        );
+        assert_eq!(
+            vad.process(&speech, Some("hello")),
+            VadDecision::SpeechContinue
+        );
+        assert_eq!(
+            vad.process(&speech, Some("hello")),
+            VadDecision::SpeechContinue
+        );
+
+        assert_eq!(vad.stable_count, 1);
+    }
+
+    #[test]
+    fn test_vad_speech_end_with_stability_bonus() {
+        let config = VadConfig {
+            silence_threshold: 0.02,
+            silence_duration_ms: 300,
+            min_utterance_ms: 100,
+        };
+        let mut vad = VadState::new(&config);
+        let now = Instant::now();
+
+        vad.in_utterance = true;
+        vad.speech_start = Some(now - Duration::from_millis(200));
+        vad.last_speech_time = now - Duration::from_millis(250);
+        vad.last_partial = Some("hello".to_string());
+        vad.stable_count = 4;
+
+        let silence = vec![0i16; 160];
+        let decision = vad.process(&silence, Some("hello"));
+        assert_eq!(decision, VadDecision::SpeechEnd);
+        assert!(!vad.in_utterance);
+    }
+
+    #[test]
+    fn test_vad_speech_continue_without_bonus() {
+        let config = VadConfig {
+            silence_threshold: 0.02,
+            silence_duration_ms: 300,
+            min_utterance_ms: 100,
+        };
+        let mut vad = VadState::new(&config);
+        let now = Instant::now();
+
+        vad.in_utterance = true;
+        vad.speech_start = Some(now - Duration::from_millis(150));
+        vad.last_speech_time = now - Duration::from_millis(50);
+        vad.stable_count = 0;
+
+        let silence = vec![0i16; 160];
+        let decision = vad.process(&silence, None);
+        assert_eq!(decision, VadDecision::SpeechContinue);
+        assert!(vad.in_utterance);
+    }
+
+    #[test]
+    fn test_vad_speech_continue_below_min_utterance() {
+        let config = VadConfig {
+            silence_threshold: 0.02,
+            silence_duration_ms: 300,
+            min_utterance_ms: 500,
+        };
+        let mut vad = VadState::new(&config);
+        let now = Instant::now();
+
+        vad.in_utterance = true;
+        vad.speech_start = Some(now - Duration::from_millis(450));
+        vad.last_speech_time = now - Duration::from_millis(400);
+        vad.stable_count = 0;
+
+        let silence = vec![0i16; 160];
+        let decision = vad.process(&silence, None);
+        assert_eq!(decision, VadDecision::SpeechContinue);
+        assert!(vad.in_utterance);
+    }
+
+    #[test]
+    fn test_vad_reset_and_state_flag() {
+        let config = VadConfig {
+            silence_threshold: 0.01,
+            silence_duration_ms: 1,
+            min_utterance_ms: 1,
+        };
+        let mut vad = VadState::new(&config);
+        assert!(!vad.is_in_utterance());
+
+        let speech: Vec<i16> = (0..160)
+            .map(|i| ((i as f32 * 0.1).sin() * 5000.0) as i16)
+            .collect();
+        assert_eq!(
+            vad.process(&speech, Some("hello")),
+            VadDecision::SpeechStart
+        );
+        assert!(vad.is_in_utterance());
+
+        vad.reset();
+        assert!(!vad.is_in_utterance());
+    }
 }

@@ -591,6 +591,17 @@ impl RtpSession {
 mod tests {
     use super::*;
     use bytes::Bytes;
+    use std::sync::Once;
+
+    fn init_tracing() {
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            let _ = tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::DEBUG)
+                .with_test_writer()
+                .try_init();
+        });
+    }
 
     // ReceiverState tests
     #[test]
@@ -815,6 +826,38 @@ mod tests {
     }
 
     #[test]
+    fn test_receive_packet_without_last_arrival() {
+        let mut session = RtpSession::new(12345, 0, 8000);
+        session.receiver_state.initialized = true;
+        session.receiver_state.base_seq = 10;
+        session.receiver_state.max_seq = 10;
+        session.receiver_state.last_timestamp = 0;
+        session.receiver_state.last_arrival = None;
+
+        let pkt = RtpPacket::new(0, 11, 160, 99999);
+        session.receive_packet(&pkt);
+
+        assert!(session.receiver_state.last_arrival.is_some());
+    }
+
+    #[test]
+    fn test_jitter_adjustment_negative() {
+        let mut session = RtpSession::new(12345, 0, 8000);
+
+        let pkt1 = RtpPacket::new(0, 100, 0, 99999);
+        session.receive_packet(&pkt1);
+
+        session.receiver_state.jitter = 1000;
+        session.receiver_state.last_arrival = Some(Instant::now() - Duration::from_millis(20));
+        session.receiver_state.last_timestamp = 160;
+
+        let pkt2 = RtpPacket::new(0, 101, 320, 99999);
+        session.receive_packet(&pkt2);
+
+        assert!(session.receiver_state.jitter < 1000);
+    }
+
+    #[test]
     fn test_timestamp_for_duration() {
         let session = RtpSession::new(12345, 0, 8000);
 
@@ -862,6 +905,19 @@ mod tests {
     }
 
     #[test]
+    fn test_sender_report_expected_zero_fraction_lost() {
+        let mut session = RtpSession::new(12345, 0, 8000);
+        session.receiver_state.initialized = true;
+        session.receiver_state.expected_packets = 0;
+        session.receiver_state.packets_lost = 5;
+        session.receiver_state.max_seq = 42;
+
+        let sr = session.create_sender_report();
+        assert_eq!(sr.report_blocks.len(), 1);
+        assert_eq!(sr.report_blocks[0].fraction_lost, 0);
+    }
+
+    #[test]
     fn test_create_receiver_report() {
         let mut session = RtpSession::new(12345, 0, 8000);
 
@@ -880,6 +936,19 @@ mod tests {
     }
 
     #[test]
+    fn test_receiver_report_expected_zero_fraction_lost() {
+        let mut session = RtpSession::new(12345, 0, 8000);
+        session.receiver_state.initialized = true;
+        session.receiver_state.expected_packets = 0;
+        session.receiver_state.packets_lost = 3;
+        session.receiver_state.max_seq = 10;
+
+        let rr = session.create_receiver_report(99999);
+        assert_eq!(rr.report_blocks.len(), 1);
+        assert_eq!(rr.report_blocks[0].fraction_lost, 0);
+    }
+
+    #[test]
     fn test_create_receiver_report_uninitialized() {
         let session = RtpSession::new(12345, 0, 8000);
 
@@ -891,8 +960,6 @@ mod tests {
 
     #[test]
     fn test_create_rtcp_compound_sender() {
-        use crate::rtcp::RtcpPacket;
-
         let mut session = RtpSession::new(12345, 0, 8000);
         session.create_packet(vec![0; 160], 160, false);
 
@@ -900,23 +967,20 @@ mod tests {
 
         // Should contain SR (first packet should be SenderReport)
         assert!(!compound.packets.is_empty());
-        assert!(matches!(&compound.packets[0], RtcpPacket::SenderReport(_)));
+        let debug = format!("{:?}", compound.packets[0]);
+        assert!(debug.contains("SenderReport"));
     }
 
     #[test]
     fn test_create_rtcp_compound_receiver() {
-        use crate::rtcp::RtcpPacket;
-
         let session = RtpSession::new(12345, 0, 8000);
 
         let compound = session.create_rtcp_compound("user@host.example.com", false);
 
         // Should contain RR (first packet should be ReceiverReport)
         assert!(!compound.packets.is_empty());
-        assert!(matches!(
-            &compound.packets[0],
-            RtcpPacket::ReceiverReport(_)
-        ));
+        let debug = format!("{:?}", compound.packets[0]);
+        assert!(debug.contains("ReceiverReport"));
     }
 
     // ==========================================================================
@@ -955,10 +1019,9 @@ mod tests {
 
     #[test]
     fn test_nack_reduces_bitrate() {
+        init_tracing();
         let mut cc = CongestionController::new(1_000_000, 100_000, 10_000_000);
-
-        // Force decrease to be allowed
-        std::thread::sleep(Duration::from_millis(150));
+        cc.last_decrease = Instant::now() - Duration::from_millis(200);
 
         cc.on_nack(5);
 
@@ -1025,6 +1088,16 @@ mod tests {
     }
 
     #[test]
+    fn test_remb_above_max_does_not_raise_cap() {
+        let mut cc = CongestionController::new(1_000_000, 100_000, 2_000_000);
+
+        cc.on_remb(5_000_000);
+
+        assert_eq!(cc.max_bitrate, 2_000_000);
+        assert_eq!(cc.target_bitrate(), 1_000_000);
+    }
+
+    #[test]
     fn test_rtt_smoothing() {
         let mut cc = CongestionController::default();
 
@@ -1075,6 +1148,17 @@ mod tests {
 
         // Should have increased from slow start
         assert!(cc.target_bitrate() > 100_000);
+    }
+
+    #[test]
+    fn test_update_rate_limited_before_interval() {
+        let mut cc = CongestionController::new(100_000, 10_000, 1_000_000);
+        cc.last_increase = Instant::now();
+
+        let before = cc.target_bitrate();
+        cc.update();
+
+        assert_eq!(cc.target_bitrate(), before);
     }
 
     #[test]
@@ -1180,17 +1264,13 @@ mod tests {
 
     #[test]
     fn test_transition_to_congestion_avoidance() {
+        init_tracing();
         let mut cc = CongestionController::new(100_000, 10_000, 500_000);
-        cc.ssthresh = 150_000;
-
-        // Increase until we hit ssthresh
-        for _ in 0..10 {
-            std::thread::sleep(Duration::from_millis(110));
-            cc.update();
-            if cc.state() == CongestionState::CongestionAvoidance {
-                break;
-            }
-        }
+        cc.ssthresh = cc.target_bitrate;
+        cc.last_increase = Instant::now() - Duration::from_millis(200);
+        cc.packets_in_interval = 10;
+        cc.nacks_in_interval = 0;
+        cc.update();
 
         // Should eventually transition
         assert_eq!(cc.state(), CongestionState::CongestionAvoidance);

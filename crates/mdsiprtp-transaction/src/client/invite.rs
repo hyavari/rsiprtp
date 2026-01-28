@@ -322,6 +322,19 @@ impl InviteClientTransaction {
 }
 
 /// Build an ACK for a non-2xx final response.
+fn parse_via_or_default(via_raw: Option<&str>, branch: &str) -> Via {
+    via_raw
+        .and_then(|v| Via::parse(v).ok())
+        .unwrap_or_else(|| Via {
+            protocol: "UDP".to_string(),
+            host: "0.0.0.0".to_string(),
+            port: 5060,
+            branch: branch.to_string(),
+            received: None,
+            rport: None,
+        })
+}
+
 fn build_ack_for_non_2xx(invite: &SipRequest) -> Option<SipRequest> {
     // Per RFC 3261 17.1.1.3:
     // - Request-URI: same as INVITE
@@ -329,35 +342,23 @@ fn build_ack_for_non_2xx(invite: &SipRequest) -> Option<SipRequest> {
     // - Via: same top Via as INVITE (same branch)
     // - To: same as INVITE but add tag from response (handled separately)
     let branch = invite.via_branch().ok()?;
-    let from_tag = invite.from_tag().ok()?;
     let call_id = invite.call_id().ok()?;
+    let (from_tag, from_uri) = invite.from_tag_and_uri().ok()?;
 
     // Extract Via header information from original INVITE
     let via_raw = invite.via_headers_raw();
-    let via = via_raw
-        .first()
-        .and_then(|v| Via::parse(v).ok())
-        .unwrap_or_else(|| Via {
-            protocol: "UDP".to_string(),
-            host: "0.0.0.0".to_string(),
-            port: 5060,
-            branch: branch.clone(),
-            received: None,
-            rport: None,
-        });
+    let via = parse_via_or_default(via_raw.first().map(String::as_str), &branch);
 
-    let ack = SipRequest::builder()
+    SipRequest::builder()
         .method(Method::Ack)
         .uri(&invite.uri().to_string())
         .via(&via.host, via.port, &via.protocol, &branch)
-        .from(&invite.from_uri().ok()?.to_string(), &from_tag)
+        .from(&from_uri.to_string(), &from_tag)
         .to(&invite.to_uri().ok()?.to_string())
         .call_id(&call_id)
         .cseq(invite.cseq().ok()?)
         .build()
-        .ok()?;
-
-    Some(ack)
+        .ok()
 }
 
 #[cfg(test)]
@@ -375,6 +376,16 @@ mod tests {
             .cseq(1)
             .build()
             .unwrap()
+    }
+
+    fn parse_request(raw: &[u8]) -> SipRequest {
+        let msg = mdsiprtp_sip::SipMessage::parse(raw).unwrap();
+        msg.as_request().unwrap().clone()
+    }
+
+    fn parse_response(raw: &[u8]) -> SipResponse {
+        let msg = mdsiprtp_sip::SipMessage::parse(raw).unwrap();
+        msg.as_response().unwrap().clone()
     }
 
     fn create_response(code: u16) -> SipResponse {
@@ -428,6 +439,19 @@ mod tests {
     }
 
     #[test]
+    fn test_calling_response_below_100_ignored() {
+        let invite = create_invite();
+        let mut tx = InviteClientTransaction::new(invite, false).unwrap();
+        tx.poll_actions();
+
+        let resp = create_response(99);
+        tx.handle_response(resp);
+
+        assert_eq!(tx.state(), State::Calling);
+        assert!(tx.poll_actions().is_empty());
+    }
+
+    #[test]
     fn test_failure_response_unreliable() {
         let invite = create_invite();
         let mut tx = InviteClientTransaction::new(invite, false).unwrap();
@@ -444,6 +468,23 @@ mod tests {
         assert!(actions
             .iter()
             .any(|a| matches!(a, Action::SetTimer(Timer::D, _))));
+    }
+
+    #[test]
+    fn test_proceeding_response_below_100_ignored() {
+        let invite = create_invite();
+        let mut tx = InviteClientTransaction::new(invite, false).unwrap();
+        tx.poll_actions();
+
+        let provisional = create_response(180);
+        tx.handle_response(provisional);
+        tx.poll_actions();
+
+        let resp = create_response(99);
+        tx.handle_response(resp);
+
+        assert_eq!(tx.state(), State::Proceeding);
+        assert!(tx.poll_actions().is_empty());
     }
 
     #[test]
@@ -517,13 +558,9 @@ mod tests {
     fn test_transaction_id_from_response() {
         let resp = create_response(200);
         // The response should have Via and CSeq from the original INVITE
-        let id = TransactionId::from_response(&resp);
-        // If the response has the necessary headers, verify them
-        if let Some(id) = id {
-            assert_eq!(id.branch, "z9hG4bKtest");
-            assert_eq!(id.method, Method::Invite);
-        }
-        // Test passes either way - response may not have all headers
+        let id = TransactionId::from_response(&resp).expect("Expected TransactionId");
+        assert_eq!(id.branch, "z9hG4bKtest");
+        assert_eq!(id.method, Method::Invite);
     }
 
     #[test]
@@ -703,9 +740,10 @@ mod tests {
         tx.handle_response(resp2);
         assert_eq!(tx.state(), State::Proceeding);
         let actions = tx.poll_actions();
-        assert!(actions
+        let has_provisional = actions
             .iter()
-            .any(|a| matches!(a, Action::Event(Event::Provisional(_)))));
+            .any(|a| matches!(a, Action::Event(Event::Provisional(_))));
+        assert!(has_provisional);
     }
 
     #[test]
@@ -850,7 +888,7 @@ mod tests {
     fn test_action_clone() {
         let action = Action::CancelTimer(Timer::B);
         let cloned = action.clone();
-        assert!(matches!(cloned, Action::CancelTimer(Timer::B)));
+        assert!(format!("{cloned:?}").contains("CancelTimer"));
     }
 
     #[test]
@@ -864,7 +902,7 @@ mod tests {
     fn test_event_clone() {
         let event = Event::TransportError;
         let cloned = event.clone();
-        assert!(matches!(cloned, Event::TransportError));
+        assert!(format!("{cloned:?}").contains("TransportError"));
     }
 
     #[test]
@@ -911,6 +949,158 @@ mod tests {
         assert!(actions
             .iter()
             .any(|a| matches!(a, Action::CancelTimer(Timer::B))));
+    }
+
+    #[test]
+    fn test_proceeding_3xx_transitions_completed() {
+        let invite = create_invite();
+        let mut tx = InviteClientTransaction::new(invite, false).unwrap();
+        tx.poll_actions();
+
+        let provisional = create_response(180);
+        tx.handle_response(provisional);
+        assert_eq!(tx.state(), State::Proceeding);
+        tx.poll_actions();
+
+        let resp = create_response(404);
+        tx.handle_response(resp);
+        assert_eq!(tx.state(), State::Completed);
+    }
+
+    #[test]
+    fn test_send_ack_missing_headers() {
+        let invite = create_invite();
+        let mut tx = InviteClientTransaction::new(invite, false).unwrap();
+        tx.poll_actions();
+
+        let raw = b"INVITE sip:bob@example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060\r\n\
+To: <sip:bob@example.com>\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+Call-ID: test@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:alice@192.168.1.1:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n";
+        let req = parse_request(raw);
+        tx.request = req.clone();
+
+        let resp = create_response(404);
+        tx.send_ack(&resp);
+        let actions = tx.poll_actions();
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn test_transaction_id_from_response_missing_cseq() {
+        let raw = b"SIP/2.0 200 OK\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bK123\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+To: <sip:bob@example.com>;tag=totag\r\n\
+Call-ID: test@example.com\r\n\
+Content-Length: 0\r\n\
+\r\n";
+        let resp = parse_response(raw);
+        assert!(TransactionId::from_response(&resp).is_none());
+    }
+
+    #[test]
+    fn test_invite_client_transaction_new_missing_branch() {
+        let raw = b"INVITE sip:bob@example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060\r\n\
+To: <sip:bob@example.com>\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+Call-ID: test@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:alice@192.168.1.1:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n";
+        let req = parse_request(raw);
+        let tx = InviteClientTransaction::new(req, false);
+        assert!(tx.is_none());
+    }
+
+    #[test]
+    fn test_build_ack_missing_from_tag() {
+        let raw = b"INVITE sip:bob@example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest\r\n\
+To: <sip:bob@example.com>\r\n\
+From: <sip:alice@example.com>\r\n\
+Call-ID: test@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:alice@192.168.1.1:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n";
+        let req = parse_request(raw);
+        assert!(build_ack_for_non_2xx(&req).is_none());
+    }
+
+    #[test]
+    fn test_build_ack_missing_call_id() {
+        let raw = b"INVITE sip:bob@example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest\r\n\
+To: <sip:bob@example.com>\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:alice@192.168.1.1:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n";
+        let req = parse_request(raw);
+        assert!(build_ack_for_non_2xx(&req).is_none());
+    }
+
+    #[test]
+    fn test_build_ack_invalid_from_uri() {
+        let raw = b"INVITE sip:bob@example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest\r\n\
+To: <sip:bob@example.com>\r\n\
+From: <sip:alice@[::1>;tag=fromtag\r\n\
+Call-ID: test@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:alice@192.168.1.1:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n";
+        let req = parse_request(raw);
+        assert!(build_ack_for_non_2xx(&req).is_none());
+    }
+
+    #[test]
+    fn test_build_ack_invalid_to_uri() {
+        let raw = b"INVITE sip:bob@example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest\r\n\
+To: <sip:bob@[::1>\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+Call-ID: test@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:alice@192.168.1.1:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n";
+        let req = parse_request(raw);
+        assert!(build_ack_for_non_2xx(&req).is_none());
+    }
+
+    #[test]
+    fn test_build_ack_invalid_cseq() {
+        let raw = b"INVITE sip:bob@example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest\r\n\
+To: <sip:bob@example.com>\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+Call-ID: test@example.com\r\n\
+CSeq: abc INVITE\r\n\
+Contact: <sip:alice@192.168.1.1:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n";
+        let req = parse_request(raw);
+        assert!(build_ack_for_non_2xx(&req).is_none());
+    }
+
+    #[test]
+    fn test_parse_via_or_default_fallback() {
+        let via = parse_via_or_default(Some("invalid"), "z9hG4bK-test");
+        assert_eq!(via.protocol, "UDP");
+        assert_eq!(via.host, "0.0.0.0");
+        assert_eq!(via.port, 5060);
+        assert_eq!(via.branch, "z9hG4bK-test");
     }
 
     #[test]
@@ -983,7 +1173,7 @@ mod tests {
             let resp = create_response(code);
             tx.handle_response(resp);
 
-            assert_eq!(tx.state(), State::Completed, "Failed for code {}", code);
+            assert_eq!(tx.state(), State::Completed);
         }
     }
 
@@ -997,7 +1187,7 @@ mod tests {
             let resp = create_response(code);
             tx.handle_response(resp);
 
-            assert_eq!(tx.state(), State::Proceeding, "Failed for code {}", code);
+            assert_eq!(tx.state(), State::Proceeding);
         }
     }
 
@@ -1011,7 +1201,7 @@ mod tests {
             let resp = create_response(code);
             tx.handle_response(resp);
 
-            assert_eq!(tx.state(), State::Terminated, "Failed for code {}", code);
+            assert_eq!(tx.state(), State::Terminated);
         }
     }
 }

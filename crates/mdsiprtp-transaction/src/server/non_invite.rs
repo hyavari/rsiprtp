@@ -233,6 +233,11 @@ impl NonInviteServerTransaction {
         std::mem::take(&mut self.actions)
     }
 
+    #[cfg(test)]
+    pub(crate) fn inject_cancel_timer(&mut self, timer: Timer) {
+        self.actions.push(Action::CancelTimer(timer));
+    }
+
     /// Handle a transport error.
     pub fn handle_transport_error(&mut self) {
         match self.state {
@@ -340,6 +345,41 @@ mod tests {
         tx.send_response(resp2);
 
         assert_eq!(tx.state(), State::Completed);
+    }
+
+    #[test]
+    fn test_response_below_100_in_proceeding_ignored() {
+        let req = create_register();
+        let mut tx = NonInviteServerTransaction::new(req.clone(), false).unwrap();
+        tx.poll_actions();
+
+        let resp1 = create_response(100, &req);
+        tx.send_response(resp1);
+        assert_eq!(tx.state(), State::Proceeding);
+        tx.poll_actions();
+
+        let resp2 = create_response(99, &req);
+        tx.send_response(resp2);
+
+        let actions = tx.poll_actions();
+        assert!(actions.is_empty());
+        assert_eq!(tx.state(), State::Proceeding);
+    }
+
+    #[test]
+    fn test_final_response_from_proceeding_reliable() {
+        let req = create_register();
+        let mut tx = NonInviteServerTransaction::new(req.clone(), true).unwrap();
+        tx.poll_actions();
+
+        let resp1 = create_response(100, &req);
+        tx.send_response(resp1);
+        tx.poll_actions();
+
+        let resp2 = create_response(200, &req);
+        tx.send_response(resp2);
+
+        assert_eq!(tx.state(), State::Terminated);
     }
 
     #[test]
@@ -473,7 +513,7 @@ mod tests {
         tx.handle_request(req);
 
         let actions = tx.poll_actions();
-        assert!(actions.iter().all(|a| !matches!(a, Action::Send(_))));
+        assert!(actions.is_empty());
     }
 
     #[test]
@@ -493,6 +533,37 @@ mod tests {
 
         let actions = tx.poll_actions();
         assert!(actions.iter().any(|a| matches!(a, Action::Send(_))));
+    }
+
+    #[test]
+    fn test_response_below_100_in_trying_ignored() {
+        let req = create_register();
+        let mut tx = NonInviteServerTransaction::new(req.clone(), false).unwrap();
+        tx.poll_actions();
+
+        let resp = create_response(99, &req);
+        tx.send_response(resp);
+
+        assert_eq!(tx.state(), State::Trying);
+        let actions = tx.poll_actions();
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn test_handle_request_in_proceeding_without_last_response() {
+        let req = create_register();
+        let mut tx = NonInviteServerTransaction::new(req.clone(), false).unwrap();
+        tx.poll_actions();
+
+        let resp = create_response(100, &req);
+        tx.send_response(resp);
+        tx.poll_actions();
+
+        tx.last_response = None;
+        tx.handle_request(req);
+
+        let actions = tx.poll_actions();
+        assert!(actions.is_empty());
     }
 
     #[test]
@@ -639,13 +710,13 @@ mod tests {
     fn test_action_event_clone() {
         let action = Action::Event(Event::TransportError);
         let cloned = action.clone();
-        assert!(matches!(cloned, Action::Event(Event::TransportError)));
+        assert!(format!("{cloned:?}").contains("TransportError"));
     }
 
     #[test]
     fn test_action_send_clone() {
         let action = Action::Send(bytes::Bytes::from("test"));
         let cloned = action.clone();
-        assert!(matches!(cloned, Action::Send(_)));
+        assert!(format!("{cloned:?}").starts_with("Send("));
     }
 }

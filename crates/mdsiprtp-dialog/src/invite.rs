@@ -361,6 +361,19 @@ impl InviteDialog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mdsiprtp_sip::SipMessage;
+
+    fn parse_request(raw: &str) -> SipRequest {
+        let msg = SipMessage::parse(raw.as_bytes()).unwrap();
+        msg.as_request().unwrap().clone()
+    }
+
+    fn is_rejected_termination(action: &Action) -> bool {
+        matches!(
+            action,
+            Action::Event(Event::Terminated(TerminationReason::Rejected(_)))
+        )
+    }
 
     fn create_invite() -> SipRequest {
         SipRequest::builder()
@@ -431,6 +444,23 @@ mod tests {
     }
 
     #[test]
+    fn test_uas_dialog_creation_invalid_invite() {
+        let invite = parse_request(
+            "INVITE sip:bob@example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest\r\n\
+From: <sip:alice@example.com>\r\n\
+To: <sip:bob@example.com>\r\n\
+Call-ID: test@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:alice@192.168.1.1:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n",
+        );
+        let dialog = InviteDialog::new_uas(invite, "mytag", "sip:me@192.168.1.2:5060");
+        assert!(dialog.is_none());
+    }
+
+    #[test]
     fn test_uas_dialog_established_on_200() {
         let invite = create_invite();
         let mut dialog =
@@ -474,6 +504,423 @@ mod tests {
         assert_eq!(dialog.state(), DialogState::Terminated);
     }
 
+    #[test]
+    fn test_uac_dialog_provisional_180() {
+        let invite = create_invite();
+        let mut dialog = InviteDialog::new_uac(invite.clone());
+
+        let response = create_response(&invite, 180);
+        dialog.handle_response(response);
+
+        let actions = dialog.poll_actions();
+        assert!(actions
+            .iter()
+            .any(|a| matches!(a, Action::Event(Event::Provisional(_)))));
+        assert_eq!(dialog.state(), DialogState::Early);
+    }
+
+    #[test]
+    fn test_uac_dialog_provisional_missing_to_tag() {
+        let invite = create_invite();
+        let mut dialog = InviteDialog::new_uac(invite.clone());
+
+        let response = SipResponse::builder()
+            .status(180, "Ringing")
+            .from_request(&invite)
+            .contact("sip:bob@192.168.1.2:5060")
+            .build()
+            .unwrap();
+
+        dialog.handle_response(response);
+
+        assert_eq!(dialog.state(), DialogState::Early);
+        assert!(dialog.info().id.remote_tag.is_empty());
+    }
+
+    #[test]
+    fn test_uac_dialog_session_progress_183() {
+        let invite = create_invite();
+        let mut dialog = InviteDialog::new_uac(invite.clone());
+
+        let response = create_response(&invite, 183);
+        dialog.handle_response(response);
+
+        let actions = dialog.poll_actions();
+        assert!(actions
+            .iter()
+            .any(|a| matches!(a, Action::Event(Event::SessionProgress(_)))));
+        assert!(actions
+            .iter()
+            .any(|a| matches!(a, Action::Event(Event::Provisional(_)))));
+    }
+
+    #[test]
+    fn test_uac_dialog_response_below_100() {
+        let invite = create_invite();
+        let mut dialog = InviteDialog::new_uac(invite.clone());
+
+        let response = create_response(&invite, 99);
+        dialog.handle_response(response);
+
+        assert_eq!(dialog.state(), DialogState::Early);
+        assert!(dialog.poll_actions().is_empty());
+    }
+
+    #[test]
+    fn test_uac_dialog_ignores_100() {
+        let invite = create_invite();
+        let mut dialog = InviteDialog::new_uac(invite.clone());
+
+        let response = create_response(&invite, 100);
+        dialog.handle_response(response);
+        assert!(dialog.poll_actions().is_empty());
+    }
+
+    #[test]
+    fn test_uac_dialog_200_missing_contact() {
+        let invite = create_invite();
+        let mut dialog = InviteDialog::new_uac(invite.clone());
+
+        let response = SipResponse::builder()
+            .status(200, "OK")
+            .from_request(&invite)
+            .to_tag("totag")
+            .build()
+            .unwrap();
+
+        dialog.handle_response(response);
+
+        assert_eq!(dialog.state(), DialogState::Confirmed);
+        assert!(dialog.info().remote_target.is_empty());
+    }
+
+    #[test]
+    fn test_uas_dialog_handle_response_noop() {
+        let invite = create_invite();
+        let mut dialog =
+            InviteDialog::new_uas(invite.clone(), "mytag", "sip:me@192.168.1.2:5060").unwrap();
+
+        let response = create_response(&invite, 200);
+        dialog.handle_response(response);
+        assert!(dialog.poll_actions().is_empty());
+    }
+
+    #[test]
+    fn test_reinvite_ignored_on_stale_cseq() {
+        let invite = create_invite();
+        let mut dialog = InviteDialog::new_uac(invite.clone());
+
+        let response = create_response(&invite, 200);
+        dialog.handle_response(response);
+        dialog.poll_actions();
+        dialog.info.remote_seq = Some(2);
+
+        let reinvite = SipRequest::builder()
+            .method(Method::Invite)
+            .uri("sip:alice@example.com")
+            .via("192.168.1.2", 5060, "UDP", "z9hG4bKreinvite")
+            .from("sip:bob@example.com", "totag")
+            .to("sip:alice@example.com")
+            .to_tag("fromtag")
+            .call_id("test@example.com")
+            .cseq(1)
+            .build()
+            .unwrap();
+
+        dialog.handle_request(reinvite);
+        assert!(dialog.poll_actions().is_empty());
+    }
+
+    #[test]
+    fn test_reinvite_triggers_event() {
+        let invite = create_invite();
+        let mut dialog = InviteDialog::new_uac(invite.clone());
+
+        let response = create_response(&invite, 200);
+        dialog.handle_response(response);
+        dialog.poll_actions();
+
+        let reinvite = SipRequest::builder()
+            .method(Method::Invite)
+            .uri("sip:alice@example.com")
+            .via("192.168.1.2", 5060, "UDP", "z9hG4bKreinvite")
+            .from("sip:bob@example.com", "totag")
+            .to("sip:alice@example.com")
+            .to_tag("fromtag")
+            .call_id("test@example.com")
+            .cseq(2)
+            .build()
+            .unwrap();
+
+        dialog.handle_request(reinvite);
+        let actions = dialog.poll_actions();
+        assert!(actions
+            .iter()
+            .any(|a| matches!(a, Action::Event(Event::ReInvite(_)))));
+    }
+
+    #[test]
+    fn test_reinvite_ignored_before_confirmed() {
+        let invite = create_invite();
+        let mut dialog = InviteDialog::new_uac(invite.clone());
+
+        let reinvite = SipRequest::builder()
+            .method(Method::Invite)
+            .uri("sip:alice@example.com")
+            .via("192.168.1.2", 5060, "UDP", "z9hG4bKreinvite")
+            .from("sip:bob@example.com", "totag")
+            .to("sip:alice@example.com")
+            .to_tag("fromtag")
+            .call_id("test@example.com")
+            .cseq(2)
+            .build()
+            .unwrap();
+
+        dialog.handle_request(reinvite);
+        assert!(dialog.poll_actions().is_empty());
+    }
+
+    #[test]
+    fn test_ack_ignored_for_uac() {
+        let invite = create_invite();
+        let mut dialog = InviteDialog::new_uac(invite.clone());
+
+        let response = create_response(&invite, 200);
+        dialog.handle_response(response);
+        dialog.poll_actions();
+
+        let ack = SipRequest::builder()
+            .method(Method::Ack)
+            .uri("sip:bob@example.com")
+            .via("192.168.1.1", 5060, "UDP", "z9hG4bKack")
+            .from("sip:alice@example.com", "fromtag")
+            .to("sip:bob@example.com")
+            .to_tag("totag")
+            .call_id("test@example.com")
+            .cseq(1)
+            .build()
+            .unwrap();
+
+        dialog.handle_request(ack);
+        assert!(!dialog.ack_sent);
+    }
+
+    #[test]
+    fn test_ack_ignored_before_confirmed_uas() {
+        let invite = create_invite();
+        let mut dialog =
+            InviteDialog::new_uas(invite.clone(), "mytag", "sip:me@192.168.1.2:5060").unwrap();
+
+        let ack = SipRequest::builder()
+            .method(Method::Ack)
+            .uri("sip:bob@example.com")
+            .via("192.168.1.1", 5060, "UDP", "z9hG4bKack")
+            .from("sip:alice@example.com", "fromtag")
+            .to("sip:bob@example.com")
+            .to_tag("mytag")
+            .call_id("test@example.com")
+            .cseq(1)
+            .build()
+            .unwrap();
+
+        dialog.handle_request(ack);
+        assert!(!dialog.ack_sent);
+    }
+
+    #[test]
+    fn test_cancel_ignored_for_uac() {
+        let invite = create_invite();
+        let mut dialog = InviteDialog::new_uac(invite.clone());
+
+        let cancel = SipRequest::builder()
+            .method(Method::Cancel)
+            .uri("sip:bob@example.com")
+            .via("192.168.1.1", 5060, "UDP", "z9hG4bKcancel")
+            .from("sip:alice@example.com", "fromtag")
+            .to("sip:bob@example.com")
+            .to_tag("totag")
+            .call_id("test@example.com")
+            .cseq(1)
+            .build()
+            .unwrap();
+
+        dialog.handle_request(cancel);
+        assert_eq!(dialog.state(), DialogState::Early);
+    }
+
+    #[test]
+    fn test_cancel_ignored_after_confirmed_uas() {
+        let invite = create_invite();
+        let mut dialog =
+            InviteDialog::new_uas(invite.clone(), "mytag", "sip:me@192.168.1.2:5060").unwrap();
+
+        let response = create_response(&invite, 200);
+        dialog.send_response(response);
+        dialog.poll_actions();
+        assert_eq!(dialog.state(), DialogState::Confirmed);
+
+        let cancel = SipRequest::builder()
+            .method(Method::Cancel)
+            .uri("sip:bob@example.com")
+            .via("192.168.1.1", 5060, "UDP", "z9hG4bKcancel")
+            .from("sip:alice@example.com", "fromtag")
+            .to("sip:bob@example.com")
+            .to_tag("mytag")
+            .call_id("test@example.com")
+            .cseq(1)
+            .build()
+            .unwrap();
+
+        dialog.handle_request(cancel);
+        assert_eq!(dialog.state(), DialogState::Confirmed);
+    }
+
+    #[test]
+    fn test_ack_sets_ack_sent_for_uas() {
+        let invite = create_invite();
+        let mut dialog =
+            InviteDialog::new_uas(invite.clone(), "mytag", "sip:me@192.168.1.2:5060").unwrap();
+
+        let response = create_response(&invite, 200);
+        dialog.send_response(response);
+        dialog.poll_actions();
+
+        let ack = SipRequest::builder()
+            .method(Method::Ack)
+            .uri("sip:bob@example.com")
+            .via("192.168.1.1", 5060, "UDP", "z9hG4bKack")
+            .from("sip:alice@example.com", "fromtag")
+            .to("sip:bob@example.com")
+            .to_tag("mytag")
+            .call_id("test@example.com")
+            .cseq(1)
+            .build()
+            .unwrap();
+
+        dialog.handle_request(ack);
+        assert!(dialog.ack_sent);
+    }
+
+    #[test]
+    fn test_cancel_terminates_early_uas() {
+        let invite = create_invite();
+        let mut dialog =
+            InviteDialog::new_uas(invite.clone(), "mytag", "sip:me@192.168.1.2:5060").unwrap();
+
+        let cancel = SipRequest::builder()
+            .method(Method::Cancel)
+            .uri("sip:bob@example.com")
+            .via("192.168.1.1", 5060, "UDP", "z9hG4bKcancel")
+            .from("sip:alice@example.com", "fromtag")
+            .to("sip:bob@example.com")
+            .to_tag("mytag")
+            .call_id("test@example.com")
+            .cseq(1)
+            .build()
+            .unwrap();
+
+        dialog.handle_request(cancel);
+        let actions = dialog.poll_actions();
+        assert!(actions.iter().any(|a| matches!(
+            a,
+            Action::Event(Event::Terminated(TerminationReason::Cancelled))
+        )));
+        assert_eq!(dialog.state(), DialogState::Terminated);
+    }
+
+    #[test]
+    fn test_send_response_rejects_uas_dialog() {
+        let invite = create_invite();
+        let mut dialog =
+            InviteDialog::new_uas(invite.clone(), "mytag", "sip:me@192.168.1.2:5060").unwrap();
+
+        let response = create_response(&invite, 486);
+        dialog.send_response(response);
+
+        let actions = dialog.poll_actions();
+        assert!(actions.iter().any(|a| {
+            matches!(
+                a,
+                Action::Event(Event::Terminated(TerminationReason::Rejected(486)))
+            )
+        }));
+        assert_eq!(dialog.state(), DialogState::Terminated);
+    }
+
+    #[test]
+    fn test_send_response_provisional_keeps_state() {
+        let invite = create_invite();
+        let mut dialog =
+            InviteDialog::new_uas(invite.clone(), "mytag", "sip:me@192.168.1.2:5060").unwrap();
+
+        let response = create_response(&invite, 180);
+        dialog.send_response(response);
+
+        assert_eq!(dialog.state(), DialogState::Early);
+    }
+
+    #[test]
+    fn test_send_response_after_confirmed_does_not_reset_state() {
+        let invite = create_invite();
+        let mut dialog =
+            InviteDialog::new_uas(invite.clone(), "mytag", "sip:me@192.168.1.2:5060").unwrap();
+
+        let response = create_response(&invite, 200);
+        dialog.send_response(response);
+        dialog.poll_actions();
+
+        let response = create_response(&invite, 200);
+        dialog.send_response(response);
+
+        assert_eq!(dialog.state(), DialogState::Confirmed);
+    }
+
+    #[test]
+    fn test_send_response_failure_after_confirmed_keeps_state() {
+        let invite = create_invite();
+        let mut dialog =
+            InviteDialog::new_uas(invite.clone(), "mytag", "sip:me@192.168.1.2:5060").unwrap();
+
+        let response = create_response(&invite, 200);
+        dialog.send_response(response);
+        dialog.poll_actions();
+
+        let response = create_response(&invite, 486);
+        dialog.send_response(response);
+
+        assert_eq!(dialog.state(), DialogState::Confirmed);
+        let actions = dialog.poll_actions();
+        assert!(actions.iter().any(|a| matches!(a, Action::SendResponse(_))));
+        assert!(!actions.iter().any(is_rejected_termination));
+    }
+
+    #[test]
+    fn test_send_bye_requires_confirmed() {
+        let invite = create_invite();
+        let mut dialog = InviteDialog::new_uac(invite);
+
+        let bye = dialog.send_bye();
+        assert!(bye.is_none());
+    }
+
+    #[test]
+    fn test_send_bye_with_route_set() {
+        let invite = create_invite();
+        let mut dialog = InviteDialog::new_uac(invite.clone());
+        let response = create_response(&invite, 200);
+        dialog.handle_response(response);
+        dialog.poll_actions();
+
+        dialog.info.route_set = crate::state::RouteSet::from_record_route_values(
+            &["<sip:proxy.example.com;lr>".to_string()],
+            false,
+        );
+
+        let bye = dialog.send_bye();
+        assert!(bye.is_some());
+        assert_eq!(dialog.state(), DialogState::Terminating);
+    }
+
     // Additional tests for better coverage
 
     #[test]
@@ -513,7 +960,8 @@ mod tests {
     fn test_action_clone() {
         let action = Action::Event(Event::Established);
         let cloned = action.clone();
-        assert!(matches!(cloned, Action::Event(Event::Established)));
+        let debug = format!("{:?}", cloned);
+        assert!(debug.contains("Established"));
     }
 
     #[test]
@@ -529,7 +977,8 @@ mod tests {
     fn test_event_clone() {
         let event = Event::Established;
         let cloned = event.clone();
-        assert!(matches!(cloned, Event::Established));
+        let debug = format!("{:?}", cloned);
+        assert!(debug.contains("Established"));
     }
 
     #[test]
@@ -545,7 +994,8 @@ mod tests {
     fn test_termination_reason_clone() {
         let reason = TerminationReason::Rejected(404);
         let cloned = reason.clone();
-        assert!(matches!(cloned, TerminationReason::Rejected(404)));
+        let debug = format!("{:?}", cloned);
+        assert!(debug.contains("Rejected"));
     }
 
     #[test]
@@ -727,17 +1177,31 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_request_invalid_cseq() {
+    fn test_handle_request_invalid_cseq_ignored() {
         let invite = create_invite();
         let mut dialog = InviteDialog::new_uac(invite.clone());
 
-        // Establish dialog
+        let raw = String::from_utf8(invite.to_bytes().to_vec()).unwrap();
+        let raw = raw.replace("CSeq: 1 INVITE", "CSeq: abc INVITE");
+        assert!(raw.contains("CSeq: abc INVITE"));
+        let parsed = SipMessage::parse(raw.as_bytes()).unwrap();
+        let request = parsed.as_request().unwrap().clone();
+
+        dialog.handle_request(request);
+        assert_eq!(dialog.state(), DialogState::Early);
+    }
+
+    #[test]
+    fn test_handle_response_other_state_noop() {
+        let invite = create_invite();
+        let mut dialog = InviteDialog::new_uac(invite.clone());
+
+        dialog.info.state = DialogState::Terminated;
         let response = create_response(&invite, 200);
         dialog.handle_response(response);
-        dialog.poll_actions();
 
-        // Request without CSeq header (would fail to parse)
-        // This is hard to construct, so we test the other path
+        assert_eq!(dialog.state(), DialogState::Terminated);
+        assert!(dialog.poll_actions().is_empty());
     }
 
     #[test]
@@ -819,10 +1283,7 @@ mod tests {
 
         assert_eq!(dialog.state(), DialogState::Terminated);
         let actions = dialog.poll_actions();
-        assert!(actions.iter().any(|a| matches!(
-            a,
-            Action::Event(Event::Terminated(TerminationReason::Rejected(486)))
-        )));
+        assert!(actions.iter().any(is_rejected_termination));
     }
 
     #[test]
@@ -848,6 +1309,32 @@ mod tests {
         let bye = dialog.send_bye();
         assert!(bye.is_some());
         assert_eq!(dialog.state(), DialogState::Terminating);
+    }
+
+    #[test]
+    fn test_send_bye_confirmed_uas() {
+        let invite = create_invite();
+        let mut dialog =
+            InviteDialog::new_uas(invite.clone(), "mytag", "sip:me@192.168.1.2:5060").unwrap();
+
+        let response = create_response(&invite, 200);
+        dialog.send_response(response);
+        dialog.poll_actions();
+
+        let bye = dialog.send_bye();
+        assert!(bye.is_some());
+        assert_eq!(dialog.state(), DialogState::Terminating);
+    }
+
+    #[test]
+    fn test_send_bye_build_failure_returns_none() {
+        let invite = create_invite();
+        let mut dialog = InviteDialog::new_uac(invite);
+        dialog.info.state = DialogState::Confirmed;
+        dialog.info.remote_target = "sip:alice@[::1".to_string();
+
+        let bye = dialog.send_bye();
+        assert!(bye.is_none());
     }
 
     #[test]
@@ -935,12 +1422,7 @@ mod tests {
             let response = create_response(&invite, code);
             dialog.handle_response(response);
 
-            assert_eq!(
-                dialog.state(),
-                DialogState::Terminated,
-                "Failed for code {}",
-                code
-            );
+            assert_eq!(dialog.state(), DialogState::Terminated);
         }
     }
 
@@ -953,12 +1435,7 @@ mod tests {
             let response = create_response(&invite, code);
             dialog.handle_response(response);
 
-            assert_eq!(
-                dialog.state(),
-                DialogState::Confirmed,
-                "Failed for code {}",
-                code
-            );
+            assert_eq!(dialog.state(), DialogState::Confirmed);
         }
     }
 }

@@ -270,14 +270,14 @@ impl JitterBuffer {
                 } else if gap > self.target_delay as i32 * 2 {
                     // Buffer is too full, accelerate by skipping ahead
                     self.next_playout_ts = Some(next_ts);
-                    if let Some(packet) = self.packets.remove(&next_ts) {
-                        self.stats.packets_played += 1;
-                        self.last_samples = packet.samples.clone();
-                        self.stats.buffer_depth = self.packets.len();
-                        return (PlayoutDecision::Accelerate, packet.samples);
-                    }
+                    let packet = self
+                        .packets
+                        .remove(&next_ts)
+                        .expect("next_ts is sourced from packets keys");
                     self.stats.buffer_depth = self.packets.len();
-                    (PlayoutDecision::Silence, vec![0; samples_per_packet])
+                    self.stats.packets_played += 1;
+                    self.last_samples = packet.samples.clone();
+                    (PlayoutDecision::Accelerate, packet.samples)
                 } else {
                     // Normal loss, conceal
                     self.stats.packets_lost += 1;
@@ -597,29 +597,23 @@ mod tests {
         };
         let mut jb = JitterBuffer::new(config);
 
-        // Push many packets with large timestamp gaps to trigger acceleration
         let samples = vec![1000i16; 160];
-        jb.push(0, 0, samples.clone());
-        jb.push(1, 160, samples.clone());
+        jb.primed = true;
+        jb.target_delay = 160;
+        jb.next_playout_ts = Some(0);
+        jb.packets.insert(
+            1000,
+            BufferedPacket {
+                sequence: 10,
+                timestamp: 1000,
+                samples: samples.clone(),
+                received_at: Instant::now(),
+            },
+        );
 
-        // Create a large gap in playout
-        for i in 2..20 {
-            jb.push(i, i as u32 * 160, samples.clone());
-        }
-
-        // Pop should eventually accelerate to catch up
-        let mut accelerated = false;
-        for _ in 0..25 {
-            let (decision, _) = jb.pop();
-            if decision == PlayoutDecision::Accelerate {
-                accelerated = true;
-                break;
-            }
-        }
-
-        // If buffer gets very full, acceleration should occur
-        // Note: This depends on internal delay adaptation
-        assert!(accelerated || jb.stats().packets_played > 0);
+        let (decision, output) = jb.pop();
+        assert_eq!(decision, PlayoutDecision::Accelerate);
+        assert_eq!(output, samples);
     }
 
     #[test]
@@ -672,9 +666,9 @@ mod tests {
 
         let samples = vec![100i16; 160];
 
+        jb.push(0, 0, samples.clone());
         // Push packets out of order - all at once before any pops
         jb.push(2, 320, samples.clone());
-        jb.push(0, 0, samples.clone());
         jb.push(3, 480, samples.clone());
         jb.push(1, 160, samples.clone());
 
@@ -687,7 +681,116 @@ mod tests {
         // Pop should work - returning packets by timestamp order
         let (decision, _) = jb.pop();
         // First pop should be Play (timestamp 0 should be available)
-        assert!(decision == PlayoutDecision::Play || decision == PlayoutDecision::Conceal);
+        assert_eq!(decision, PlayoutDecision::Play);
+    }
+
+    #[test]
+    fn test_pop_with_empty_buffer_primed() {
+        let mut jb = JitterBuffer::new(JitterBufferConfig::g711());
+        jb.primed = true;
+        jb.next_playout_ts = Some(0);
+
+        let (decision, samples) = jb.pop();
+        assert_eq!(decision, PlayoutDecision::Conceal);
+        assert_eq!(samples.len(), 160);
+    }
+
+    #[test]
+    fn test_pop_accelerates_when_buffer_too_full() {
+        let config = JitterBufferConfig {
+            initial_delay_ms: 20,
+            ..JitterBufferConfig::g711()
+        };
+        let mut jb = JitterBuffer::new(config);
+        jb.primed = true;
+        jb.target_delay = jb.config.ms_to_samples(1);
+        jb.next_playout_ts = Some(0);
+
+        let samples = vec![1i16; 160];
+        let packet = BufferedPacket {
+            sequence: 2,
+            timestamp: 1600,
+            samples: samples.clone(),
+            received_at: Instant::now(),
+        };
+        jb.packets.insert(1600, packet);
+
+        let (decision, out) = jb.pop();
+        assert_eq!(decision, PlayoutDecision::Accelerate);
+        assert_eq!(out, samples);
+    }
+
+    #[test]
+    fn test_pop_conceals_when_gap_within_delay_window() {
+        let mut jb = JitterBuffer::new(JitterBufferConfig::g711());
+        jb.primed = true;
+        jb.target_delay = 200;
+        jb.next_playout_ts = Some(0);
+        jb.last_samples = vec![1i16; 160];
+
+        let packet = BufferedPacket {
+            sequence: 2,
+            timestamp: 200,
+            samples: vec![2i16; 160],
+            received_at: Instant::now(),
+        };
+        jb.packets.insert(200, packet);
+
+        let (decision, samples) = jb.pop();
+        assert_eq!(decision, PlayoutDecision::Conceal);
+        assert_eq!(samples.len(), 160);
+    }
+
+    #[test]
+    fn test_pop_without_next_playout_ts() {
+        let mut jb = JitterBuffer::new(JitterBufferConfig::g711());
+        jb.primed = true;
+        jb.next_playout_ts = None;
+
+        let (decision, samples) = jb.pop();
+        assert_eq!(decision, PlayoutDecision::Silence);
+        assert_eq!(samples.len(), 160);
+    }
+
+    #[test]
+    fn test_push_without_next_playout_ts() {
+        let mut jb = JitterBuffer::new(JitterBufferConfig::g711());
+        let samples = vec![0i16; 160];
+
+        jb.push(0, 0, samples.clone());
+        jb.next_playout_ts = None;
+
+        assert!(jb.push(1, 160, samples.clone()));
+        assert_eq!(jb.stats().packets_late, 0);
+    }
+
+    #[test]
+    fn test_push_without_next_seq() {
+        let mut jb = JitterBuffer::new(JitterBufferConfig::g711());
+        let samples = vec![0i16; 160];
+
+        jb.push(0, 0, samples.clone());
+        jb.next_seq = None;
+
+        assert!(jb.push(1, 160, samples));
+        assert!(jb.next_seq.is_none());
+    }
+
+    #[test]
+    fn test_adapt_delay_increase_and_decrease() {
+        let mut jb = JitterBuffer::new(JitterBufferConfig::g711());
+        let original = jb.target_delay;
+
+        // Force a higher target delay.
+        jb.jitter = (jb.config.ms_to_samples(jb.config.max_delay_ms) / 2) as f64;
+        jb.adapt_delay();
+        let increased = jb.target_delay;
+        assert!(increased > original);
+
+        // Force a lower target delay.
+        jb.jitter = 0.0;
+        jb.adapt_delay();
+        assert!(jb.target_delay < increased);
     }
 
     #[test]
@@ -714,7 +817,7 @@ mod tests {
         // Concealed audio should fade out
         let start_energy: i64 = concealed[..10].iter().map(|&s| s.abs() as i64).sum();
         let end_energy: i64 = concealed[150..].iter().map(|&s| s.abs() as i64).sum();
-        assert!(end_energy <= start_energy, "Concealment should fade out");
+        assert!(end_energy <= start_energy);
     }
 
     #[test]

@@ -16,11 +16,111 @@ use tracing::{debug, error, trace, warn};
 
 use crate::traits::{IncomingMessage, OutgoingMessage, TransportProtocol};
 
+#[cfg(test)]
+use std::sync::{
+    atomic::{AtomicU8, Ordering},
+    LazyLock, Mutex as StdMutex,
+};
+
 /// Maximum SIP message size over TCP.
 pub const MAX_TCP_SIZE: usize = 65536;
 
 /// Initial buffer size for reading.
 const INITIAL_BUF_SIZE: usize = 4096;
+
+#[cfg(test)]
+static FORCE_ACCEPT_ERROR: AtomicU8 = AtomicU8::new(0);
+#[cfg(test)]
+static FORCE_READ_ERROR: AtomicU8 = AtomicU8::new(0);
+#[cfg(test)]
+static FORCE_WRITE_ERROR: AtomicU8 = AtomicU8::new(0);
+#[cfg(test)]
+static FORCE_BIND_ERROR: AtomicU8 = AtomicU8::new(0);
+#[cfg(test)]
+static FORCE_LOCAL_ADDR_ERROR: AtomicU8 = AtomicU8::new(0);
+#[cfg(test)]
+static FORCE_SKIP_CONNECT_INSERT: LazyLock<StdMutex<Option<SocketAddr>>> =
+    LazyLock::new(|| StdMutex::new(None));
+
+#[cfg(test)]
+fn force_accept_error_once() {
+    FORCE_ACCEPT_ERROR.store(1, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn force_accept_error_other_message_once() {
+    FORCE_ACCEPT_ERROR.store(2, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn force_accept_error_other_kind_once() {
+    FORCE_ACCEPT_ERROR.store(3, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn force_read_error_once() {
+    FORCE_READ_ERROR.store(1, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn force_write_error_once() {
+    FORCE_WRITE_ERROR.store(1, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn force_bind_error_once() {
+    FORCE_BIND_ERROR.store(1, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn force_local_addr_error_once() {
+    FORCE_LOCAL_ADDR_ERROR.store(1, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn force_skip_connect_insert_once(dest: SocketAddr) {
+    let mut guard = FORCE_SKIP_CONNECT_INSERT.lock().unwrap();
+    *guard = Some(dest);
+}
+
+#[cfg(test)]
+fn take_skip_connect_insert_for(dest: SocketAddr) -> bool {
+    let mut guard = FORCE_SKIP_CONNECT_INSERT.lock().unwrap();
+    if guard.as_ref() == Some(&dest) {
+        *guard = None;
+        true
+    } else {
+        false
+    }
+}
+
+#[cfg(test)]
+fn take_forced_accept_error() -> Option<std::io::Error> {
+    match FORCE_ACCEPT_ERROR.swap(0, Ordering::SeqCst) {
+        1 => Some(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "forced accept error",
+        )),
+        2 => Some(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "forced accept error other",
+        )),
+        3 => Some(std::io::Error::new(
+            std::io::ErrorKind::ConnectionAborted,
+            "forced accept error",
+        )),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+fn take_forced_error(flag: &AtomicU8, message: &str) -> Option<std::io::Error> {
+    if flag.swap(0, Ordering::SeqCst) == 1 {
+        Some(std::io::Error::new(std::io::ErrorKind::Other, message))
+    } else {
+        None
+    }
+}
 
 /// TCP connection state.
 struct TcpConnection {
@@ -48,13 +148,13 @@ impl TcpConnection {
     async fn read_message(&mut self) -> Result<Option<Bytes>> {
         loop {
             // Try to parse a complete message from the buffer
-            if let Some(msg) = self.try_parse_message()? {
+            if let Some(msg) = self.try_parse_message() {
                 return Ok(Some(msg));
             }
 
             // Need more data
             let mut temp_buf = [0u8; 4096];
-            let n = self.stream.read(&mut temp_buf).await?;
+            let n = stream_read(&mut self.stream, &mut temp_buf).await?;
 
             if n == 0 {
                 // Connection closed
@@ -79,17 +179,10 @@ impl TcpConnection {
     }
 
     /// Try to parse a complete SIP message from the buffer.
-    fn try_parse_message(&mut self) -> Result<Option<Bytes>> {
+    fn try_parse_message(&mut self) -> Option<Bytes> {
         // Look for end of headers (double CRLF)
         let data = &self.read_buf[..];
-        let header_end = find_header_end(data);
-
-        if header_end.is_none() {
-            // Haven't received complete headers yet
-            return Ok(None);
-        }
-
-        let header_end = header_end.unwrap();
+        let header_end = find_header_end(data)?;
 
         // Parse Content-Length from headers
         let headers = &data[..header_end];
@@ -99,19 +192,51 @@ impl TcpConnection {
 
         if data.len() < total_length {
             // Haven't received complete body yet
-            return Ok(None);
+            return None;
         }
 
         // Extract complete message
         let msg = self.read_buf.split_to(total_length).freeze();
-        Ok(Some(msg))
+        Some(msg)
     }
 
     /// Write a message to the connection.
     async fn write_message(&mut self, data: &[u8]) -> Result<()> {
-        self.stream.write_all(data).await?;
+        stream_write_all(&mut self.stream, data).await?;
         Ok(())
     }
+}
+
+async fn stream_read(stream: &mut TcpStream, buf: &mut [u8]) -> std::io::Result<usize> {
+    #[cfg(test)]
+    if let Some(err) = take_forced_error(&FORCE_READ_ERROR, "forced read error") {
+        return Err(err);
+    }
+    stream.read(buf).await
+}
+
+async fn stream_write_all(stream: &mut TcpStream, data: &[u8]) -> std::io::Result<()> {
+    #[cfg(test)]
+    if let Some(err) = take_forced_error(&FORCE_WRITE_ERROR, "forced write error") {
+        return Err(err);
+    }
+    stream.write_all(data).await
+}
+
+async fn bind_listener(addr: SocketAddr) -> std::io::Result<TcpListener> {
+    #[cfg(test)]
+    if let Some(err) = take_forced_error(&FORCE_BIND_ERROR, "forced bind error") {
+        return Err(err);
+    }
+    TcpListener::bind(addr).await
+}
+
+fn listener_local_addr(listener: &TcpListener) -> std::io::Result<SocketAddr> {
+    #[cfg(test)]
+    if let Some(err) = take_forced_error(&FORCE_LOCAL_ADDR_ERROR, "forced local_addr error") {
+        return Err(err);
+    }
+    listener.local_addr()
 }
 
 /// Find the end of SIP headers (double CRLF).
@@ -134,10 +259,9 @@ fn parse_content_length(headers: &[u8]) -> usize {
     for line in headers_str.lines() {
         let line_lower = line.to_lowercase();
         if line_lower.starts_with("content-length:") || line_lower.starts_with("l:") {
-            if let Some(value) = line.split(':').nth(1) {
-                if let Ok(len) = value.trim().parse() {
-                    return len;
-                }
+            let value = line.split_once(':').map(|(_, value)| value).unwrap_or("");
+            if let Ok(len) = value.trim().parse() {
+                return len;
             }
         }
     }
@@ -161,8 +285,8 @@ impl TcpTransport {
     ///
     /// This creates a listener for incoming connections.
     pub async fn bind(addr: SocketAddr) -> Result<Self> {
-        let listener = TcpListener::bind(addr).await?;
-        let local_addr = listener.local_addr()?;
+        let listener = bind_listener(addr).await?;
+        let local_addr = listener_local_addr(&listener)?;
         debug!("TCP transport bound to {}", local_addr);
 
         Ok(Self {
@@ -203,6 +327,10 @@ impl TcpTransport {
         let conn = TcpConnection::new(stream, addr);
 
         let mut connections = self.connections.write().await;
+        #[cfg(test)]
+        if take_skip_connect_insert_for(addr) {
+            return Ok(());
+        }
         connections.insert(addr, Arc::new(Mutex::new(conn)));
 
         Ok(())
@@ -221,13 +349,12 @@ impl TcpTransport {
         let conn_arc = {
             let connections = self.connections.read().await;
             connections.get(&dest).cloned()
-        };
-
-        if let Some(conn_arc) = conn_arc {
-            let mut conn = conn_arc.lock().await;
-            trace!("Sending {} bytes to {} over TCP", msg.data.len(), dest);
-            conn.write_message(&msg.data).await?;
         }
+        .ok_or(mdsiprtp_core::TransportError::ConnectionClosed)?;
+
+        let mut conn = conn_arc.lock().await;
+        trace!("Sending {} bytes to {} over TCP", msg.data.len(), dest);
+        conn.write_message(&msg.data).await?;
 
         Ok(())
     }
@@ -255,7 +382,18 @@ impl TcpTransport {
 
             tokio::spawn(async move {
                 loop {
-                    match listener.accept().await {
+                    let accept_result = async {
+                        #[cfg(test)]
+                        {
+                            if let Some(err) = take_forced_accept_error() {
+                                return Err(err);
+                            }
+                        }
+                        listener.accept().await
+                    }
+                    .await;
+
+                    match accept_result {
                         Ok((stream, remote_addr)) => {
                             debug!("Accepted connection from {}", remote_addr);
 
@@ -277,6 +415,12 @@ impl TcpTransport {
                         }
                         Err(e) => {
                             error!("TCP accept error: {}", e);
+                            #[cfg(test)]
+                            if e.kind() == std::io::ErrorKind::Other
+                                && e.to_string() == "forced accept error"
+                            {
+                                break;
+                            }
                         }
                     }
                 }
@@ -399,6 +543,32 @@ impl TcpSender {
 mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
+    use std::sync::atomic::{AtomicU8, Ordering};
+    use std::sync::{Arc, Once};
+
+    fn init_tracing() {
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            let _ = tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::TRACE)
+                .with_test_writer()
+                .try_init();
+        });
+    }
+
+    async fn wait_for_forced_accept_error_clear_inner(flag: &AtomicU8) {
+        for _ in 0..20 {
+            if flag.load(Ordering::SeqCst) == 0 {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("forced accept error not consumed");
+    }
+
+    async fn wait_for_forced_accept_error_clear() {
+        wait_for_forced_accept_error_clear_inner(&FORCE_ACCEPT_ERROR).await;
+    }
 
     // Constants tests
     #[test]
@@ -537,6 +707,188 @@ mod tests {
         assert!(transport.local_addr().is_ipv6());
     }
 
+    #[tokio::test]
+    async fn test_tcp_bind_forced_error() {
+        force_bind_error_once();
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let result = TcpTransport::bind(addr).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_tcp_bind_forced_local_addr_error() {
+        force_local_addr_error_once();
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let result = TcpTransport::bind(addr).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_tcp_connection_read_and_write() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = listener.local_addr().unwrap();
+
+        let client_task = tokio::spawn(async move {
+            let mut stream = TcpStream::connect(server_addr).await.unwrap();
+            let msg = b"INVITE sip:test@example.com SIP/2.0\r\nContent-Length: 0\r\n\r\n";
+            stream.write_all(msg).await.unwrap();
+
+            let mut buf = [0u8; 64];
+            let n = stream.read(&mut buf).await.unwrap();
+            String::from_utf8_lossy(&buf[..n]).to_string()
+        });
+
+        let (stream, remote) = listener.accept().await.unwrap();
+        let mut conn = TcpConnection::new(stream, remote);
+        let msg = conn.read_message().await.unwrap().unwrap();
+        assert!(msg.starts_with(b"INVITE"));
+
+        conn.write_message(b"PONG").await.unwrap();
+        let received = client_task.await.unwrap();
+        assert!(received.contains("PONG"));
+    }
+
+    #[tokio::test]
+    async fn test_tcp_connection_forced_read_error() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = listener.local_addr().unwrap();
+
+        let client_task =
+            tokio::spawn(async move { TcpStream::connect(server_addr).await.unwrap() });
+
+        let (stream, remote) = listener.accept().await.unwrap();
+        let mut conn = TcpConnection::new(stream, remote);
+        let _client = client_task.await.unwrap();
+
+        force_read_error_once();
+        let result = conn.read_message().await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_tcp_connection_forced_write_error() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = listener.local_addr().unwrap();
+
+        let client_task = tokio::spawn(async move {
+            let _stream = TcpStream::connect(server_addr).await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        });
+
+        let (stream, remote) = listener.accept().await.unwrap();
+        let mut conn = TcpConnection::new(stream, remote);
+
+        force_write_error_once();
+        let result = conn.write_message(b"PING").await;
+        assert!(result.is_err());
+
+        client_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_tcp_sender_send_existing_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = listener.local_addr().unwrap();
+
+        let client_task = tokio::spawn(async move {
+            let mut client = TcpStream::connect(server_addr).await.unwrap();
+            let mut buf = [0u8; 16];
+            let n =
+                tokio::time::timeout(std::time::Duration::from_millis(500), client.read(&mut buf))
+                    .await
+                    .unwrap()
+                    .unwrap();
+            buf[..n].to_vec()
+        });
+
+        let (stream, remote_addr) = listener.accept().await.unwrap();
+        let mut map = HashMap::new();
+        map.insert(
+            remote_addr,
+            Arc::new(Mutex::new(TcpConnection::new(stream, remote_addr))),
+        );
+        let sender = TcpSender {
+            connections: Arc::new(RwLock::new(map)),
+        };
+
+        let msg = OutgoingMessage::new(Bytes::from_static(b"PING"), remote_addr);
+        sender.send(msg).await.unwrap();
+
+        let data = client_task.await.unwrap();
+        assert_eq!(data, b"PING");
+    }
+
+    #[tokio::test]
+    async fn test_tcp_accept_error_logged() {
+        init_tracing();
+        force_accept_error_once();
+        let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let server = TcpTransport::bind(server_addr).await.unwrap();
+
+        let (_rx, _sender) = server.start();
+        wait_for_forced_accept_error_clear().await;
+    }
+
+    #[tokio::test]
+    async fn test_tcp_accept_error_other_message() {
+        init_tracing();
+        force_accept_error_other_message_once();
+        let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let server = TcpTransport::bind(server_addr).await.unwrap();
+
+        let (_rx, _sender) = server.start();
+        wait_for_forced_accept_error_clear().await;
+    }
+
+    #[tokio::test]
+    async fn test_tcp_accept_error_other_kind() {
+        init_tracing();
+        force_accept_error_other_kind_once();
+        let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let server = TcpTransport::bind(server_addr).await.unwrap();
+
+        let (_rx, _sender) = server.start();
+        wait_for_forced_accept_error_clear().await;
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_forced_accept_error_clear_panics() {
+        let flag = Arc::new(AtomicU8::new(1));
+        let flag_handle = flag.clone();
+        let handle = tokio::spawn(async move {
+            wait_for_forced_accept_error_clear_inner(&flag_handle).await;
+        });
+        let result = handle.await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_tcp_start_spawns_read_loop_for_existing_connections() {
+        init_tracing();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = listener.local_addr().unwrap();
+
+        let server_task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let msg = b"OPTIONS sip:test@example.com SIP/2.0\r\nContent-Length: 0\r\n\r\n";
+            stream.write_all(msg).await.unwrap();
+        });
+
+        let client_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let transport = TcpTransport::new_client(client_addr);
+        transport.connect(server_addr).await.unwrap();
+
+        let (mut rx, _sender) = transport.start();
+
+        let received = tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(received.transport, TransportProtocol::Tcp);
+
+        let _ = server_task.await;
+    }
+
     #[test]
     fn test_tcp_new_client() {
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 5060);
@@ -580,6 +932,60 @@ mod tests {
         // Try to send without connection - should fail
         let dest = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9999);
         let msg = OutgoingMessage::new(Bytes::from_static(b"test"), dest);
+        let result = sender.send(msg).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_tcp_send_missing_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = listener.local_addr().unwrap();
+        let server_handle = tokio::spawn(async move {
+            let _ = listener.accept().await;
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        });
+
+        let client_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let client = TcpTransport::bind(client_addr).await.unwrap();
+
+        force_skip_connect_insert_once(server_addr);
+        let msg = OutgoingMessage::new(Bytes::from_static(b"test"), server_addr);
+        let result = client.send(msg).await;
+        assert!(result.is_err());
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_tcp_send_forced_write_error() {
+        let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let server = TcpTransport::bind(server_addr).await.unwrap();
+        let server_addr = server.local_addr();
+        let (_rx, _sender) = server.start();
+
+        let client_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let client = TcpTransport::bind(client_addr).await.unwrap();
+        client.connect(server_addr).await.unwrap();
+
+        force_write_error_once();
+        let msg = OutgoingMessage::new(Bytes::from_static(b"test"), server_addr);
+        let result = client.send(msg).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_tcp_sender_forced_write_error() {
+        let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let server = TcpTransport::bind(server_addr).await.unwrap();
+        let server_addr = server.local_addr();
+        let (_rx, _sender) = server.start();
+
+        let client_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let client = TcpTransport::bind(client_addr).await.unwrap();
+        client.connect(server_addr).await.unwrap();
+
+        let sender = client.sender();
+        force_write_error_once();
+        let msg = OutgoingMessage::new(Bytes::from_static(b"test"), server_addr);
         let result = sender.send(msg).await;
         assert!(result.is_err());
     }
@@ -707,6 +1113,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tcp_bidirectional() {
+        init_tracing();
         // Create server
         let server_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
         let server = TcpTransport::bind(server_addr).await.unwrap();
@@ -800,8 +1207,8 @@ mod tests {
         // Server should close connection due to message too large
         // The receiver should not get a valid message or should timeout
         let result = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await;
-        // Either timeout or connection closed - both indicate error handling worked
-        assert!(result.is_err() || result.unwrap().is_none());
+        // Timeout indicates no valid message arrived
+        assert!(result.is_err());
     }
 
     #[tokio::test]
@@ -863,11 +1270,7 @@ mod tests {
                 .unwrap()
                 .unwrap();
             let expected = format!("test{}@example.com", i);
-            assert!(
-                String::from_utf8_lossy(&received.data).contains(&expected),
-                "Message {} not received correctly",
-                i
-            );
+            assert!(String::from_utf8_lossy(&received.data).contains(&expected));
         }
     }
 
@@ -962,10 +1365,7 @@ mod tests {
 
         // Should not receive message yet (incomplete)
         let result = tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await;
-        assert!(
-            result.is_err(),
-            "Should timeout waiting for complete message"
-        );
+        assert!(result.is_err());
 
         // Now send remaining 50 bytes
         stream.write_all(&vec![b'B'; 50]).await.unwrap();
@@ -1124,8 +1524,8 @@ mod tests {
 
         // Server should handle this gracefully
         let result = tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await;
-        // Should timeout or receive None
-        assert!(result.is_err() || result.unwrap().is_none());
+        // Should timeout with no message
+        assert!(result.is_err());
     }
 
     #[tokio::test]
@@ -1396,13 +1796,9 @@ mod tests {
                 .unwrap()
                 .unwrap();
 
-            if received
-                .data
-                .windows(7)
-                .any(|w| w == b"client1" || w == b"client2")
-            {
-                received_count += 1;
-            }
+            let is_client1 = received.data.windows(7).any(|w| w == b"client1");
+            let is_client2 = received.data.windows(7).any(|w| w == b"client2");
+            received_count += usize::from(is_client1) + usize::from(is_client2);
         }
 
         assert_eq!(received_count, 2);

@@ -12,12 +12,111 @@ use tracing::{debug, error, trace};
 
 use crate::traits::{IncomingMessage, OutgoingMessage, TransportProtocol};
 
+#[cfg(test)]
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    LazyLock, Mutex as StdMutex,
+};
+
 /// Maximum SIP message size over UDP (per RFC 3261).
 /// Messages larger than this should use TCP.
 pub const MAX_UDP_SIZE: usize = 65535;
 
 /// Recommended MTU-safe size for SIP over UDP.
 pub const MTU_SAFE_SIZE: usize = 1300;
+
+#[cfg(test)]
+static FORCE_RECV_ERROR: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+static FORCE_BIND_ERROR: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+static FORCE_LOCAL_ADDR_ERROR: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+static FORCE_SEND_ERROR_DEST: LazyLock<StdMutex<Option<SocketAddr>>> =
+    LazyLock::new(|| StdMutex::new(None));
+
+#[cfg(test)]
+fn force_recv_error_once() {
+    FORCE_RECV_ERROR.store(true, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn force_bind_error_once() {
+    FORCE_BIND_ERROR.store(true, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn force_local_addr_error_once() {
+    FORCE_LOCAL_ADDR_ERROR.store(true, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn force_send_error_once(dest: SocketAddr) {
+    let mut guard = FORCE_SEND_ERROR_DEST.lock().unwrap();
+    *guard = Some(dest);
+}
+
+#[cfg(test)]
+fn take_forced_send_error(dest: SocketAddr) -> Option<std::io::Error> {
+    let mut guard = FORCE_SEND_ERROR_DEST.lock().unwrap();
+    if guard.as_ref() == Some(&dest) {
+        *guard = None;
+        Some(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "forced send error",
+        ))
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+fn take_forced_error(flag: &AtomicBool, message: &str) -> Option<std::io::Error> {
+    if flag.swap(false, Ordering::SeqCst) {
+        Some(std::io::Error::new(std::io::ErrorKind::Other, message))
+    } else {
+        None
+    }
+}
+
+async fn bind_socket(addr: SocketAddr) -> std::io::Result<UdpSocket> {
+    #[cfg(test)]
+    if let Some(err) = take_forced_error(&FORCE_BIND_ERROR, "forced bind error") {
+        return Err(err);
+    }
+    UdpSocket::bind(addr).await
+}
+
+fn socket_local_addr(socket: &UdpSocket) -> std::io::Result<SocketAddr> {
+    #[cfg(test)]
+    if let Some(err) = take_forced_error(&FORCE_LOCAL_ADDR_ERROR, "forced local_addr error") {
+        return Err(err);
+    }
+    socket.local_addr()
+}
+
+async fn socket_send_to(
+    socket: &UdpSocket,
+    data: &[u8],
+    dest: SocketAddr,
+) -> std::io::Result<usize> {
+    #[cfg(test)]
+    if let Some(err) = take_forced_send_error(dest) {
+        return Err(err);
+    }
+    socket.send_to(data, dest).await
+}
+
+async fn socket_recv_from(
+    socket: &UdpSocket,
+    buf: &mut [u8],
+) -> std::io::Result<(usize, SocketAddr)> {
+    #[cfg(test)]
+    if let Some(err) = take_forced_error(&FORCE_RECV_ERROR, "forced recv error") {
+        return Err(err);
+    }
+    socket.recv_from(buf).await
+}
 
 /// UDP transport for SIP messages.
 pub struct UdpTransport {
@@ -30,8 +129,8 @@ pub struct UdpTransport {
 impl UdpTransport {
     /// Bind to a local address and create a new UDP transport.
     pub async fn bind(addr: SocketAddr) -> Result<Self> {
-        let socket = UdpSocket::bind(addr).await?;
-        let local_addr = socket.local_addr()?;
+        let socket = bind_socket(addr).await?;
+        let local_addr = socket_local_addr(&socket)?;
         debug!("UDP transport bound to {}", local_addr);
 
         Ok(Self {
@@ -48,14 +147,14 @@ impl UdpTransport {
     /// Send a message to a destination.
     pub async fn send(&self, msg: OutgoingMessage) -> Result<()> {
         trace!("Sending {} bytes to {}", msg.data.len(), msg.destination);
-        self.socket.send_to(&msg.data, msg.destination).await?;
+        socket_send_to(&self.socket, &msg.data, msg.destination).await?;
         Ok(())
     }
 
     /// Send raw bytes to a destination.
     pub async fn send_to(&self, data: &[u8], dest: SocketAddr) -> Result<()> {
         trace!("Sending {} bytes to {}", data.len(), dest);
-        self.socket.send_to(data, dest).await?;
+        socket_send_to(&self.socket, data, dest).await?;
         Ok(())
     }
 
@@ -64,7 +163,7 @@ impl UdpTransport {
     /// Returns the message data and source address.
     pub async fn recv(&self) -> Result<IncomingMessage> {
         let mut buf = vec![0u8; MAX_UDP_SIZE];
-        let (len, source) = self.socket.recv_from(&mut buf).await?;
+        let (len, source) = socket_recv_from(&self.socket, &mut buf).await?;
         buf.truncate(len);
 
         trace!("Received {} bytes from {}", len, source);
@@ -82,11 +181,26 @@ impl UdpTransport {
     pub fn into_receiver(self) -> (mpsc::Receiver<IncomingMessage>, UdpSender) {
         let (tx, rx) = mpsc::channel(256);
         let socket = self.socket.clone();
+        let recv_socket = socket.clone();
 
         tokio::spawn(async move {
             let mut buf = vec![0u8; MAX_UDP_SIZE];
             loop {
-                match self.socket.recv_from(&mut buf).await {
+                let recv_result = async {
+                    #[cfg(test)]
+                    {
+                        if FORCE_RECV_ERROR.swap(false, Ordering::SeqCst) {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                "forced recv error",
+                            ));
+                        }
+                    }
+                    recv_socket.recv_from(&mut buf).await
+                }
+                .await;
+
+                match recv_result {
                     Ok((len, source)) => {
                         let data = Bytes::from(buf[..len].to_vec());
                         trace!("Received {} bytes from {}", len, source);
@@ -131,14 +245,14 @@ impl UdpSender {
     /// Send a message.
     pub async fn send(&self, msg: OutgoingMessage) -> Result<()> {
         trace!("Sending {} bytes to {}", msg.data.len(), msg.destination);
-        self.socket.send_to(&msg.data, msg.destination).await?;
+        socket_send_to(&self.socket, &msg.data, msg.destination).await?;
         Ok(())
     }
 
     /// Send raw bytes to a destination.
     pub async fn send_to(&self, data: &[u8], dest: SocketAddr) -> Result<()> {
         trace!("Sending {} bytes to {}", data.len(), dest);
-        self.socket.send_to(data, dest).await?;
+        socket_send_to(&self.socket, data, dest).await?;
         Ok(())
     }
 }
@@ -147,6 +261,18 @@ impl UdpSender {
 mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
+    use std::sync::Once;
+    use std::time::Duration;
+
+    fn init_tracing() {
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            let _ = tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::DEBUG)
+                .with_test_writer()
+                .try_init();
+        });
+    }
 
     // Constants tests
     #[test]
@@ -175,12 +301,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_udp_bind_forced_error() {
+        force_bind_error_once();
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let result = UdpTransport::bind(addr).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_udp_bind_forced_local_addr_error() {
+        force_local_addr_error_once();
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let result = UdpTransport::bind(addr).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
     async fn test_udp_local_addr() {
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
         let transport = UdpTransport::bind(addr).await.unwrap();
         let local = transport.local_addr();
         assert!(local.port() > 0);
         assert_eq!(local.ip(), IpAddr::V4(Ipv4Addr::LOCALHOST));
+    }
+
+    #[tokio::test]
+    async fn test_udp_recv_error_logged() {
+        init_tracing();
+        force_recv_error_once();
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let transport = UdpTransport::bind(addr).await.unwrap();
+
+        let (_rx, _sender) = transport.into_receiver();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    #[tokio::test]
+    async fn test_udp_recv_forced_error() {
+        force_recv_error_once();
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let transport = UdpTransport::bind(addr).await.unwrap();
+        let result = transport.recv().await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]
@@ -199,6 +361,29 @@ mod tests {
         // Receive on t2
         let received = t2.recv().await.unwrap();
         assert_eq!(&received.data[..], b"SIP/2.0 200 OK\r\n\r\n");
+    }
+
+    #[tokio::test]
+    async fn test_udp_send_forced_error() {
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let transport = UdpTransport::bind(addr).await.unwrap();
+
+        let dest = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9999);
+        force_send_error_once(dest);
+        let msg = OutgoingMessage::new(Bytes::from_static(b"test"), dest);
+        let result = transport.send(msg).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_udp_send_to_forced_error() {
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let transport = UdpTransport::bind(addr).await.unwrap();
+
+        let dest = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9999);
+        force_send_error_once(dest);
+        let result = transport.send_to(b"test", dest).await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]
@@ -239,6 +424,22 @@ mod tests {
 
         let received = t2.recv().await.unwrap();
         assert_eq!(received.data.len(), MTU_SAFE_SIZE);
+    }
+
+    #[tokio::test]
+    async fn test_udp_receiver_drop_stops_loop() {
+        let receiver_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let sender_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+
+        let receiver = UdpTransport::bind(receiver_addr).await.unwrap();
+        let receiver_addr = receiver.local_addr();
+        let (rx, _sender) = receiver.into_receiver();
+        drop(rx);
+
+        let sender = UdpTransport::bind(sender_addr).await.unwrap();
+        sender.send_to(b"ping", receiver_addr).await.unwrap();
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
     #[tokio::test]
@@ -296,6 +497,31 @@ mod tests {
 
         let received = t2.recv().await.unwrap();
         assert_eq!(&received.data[..], b"RAW_BYTES");
+    }
+
+    #[tokio::test]
+    async fn test_udp_sender_send_forced_error() {
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let transport = UdpTransport::bind(addr).await.unwrap();
+        let sender = transport.sender();
+
+        let dest = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9999);
+        force_send_error_once(dest);
+        let msg = OutgoingMessage::new(Bytes::from_static(b"TEST"), dest);
+        let result = sender.send(msg).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_udp_sender_send_to_forced_error() {
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let transport = UdpTransport::bind(addr).await.unwrap();
+        let sender = transport.sender();
+
+        let dest = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9999);
+        force_send_error_once(dest);
+        let result = sender.send_to(b"TEST", dest).await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]

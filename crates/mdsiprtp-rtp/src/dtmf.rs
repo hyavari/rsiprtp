@@ -449,6 +449,13 @@ mod tests {
     }
 
     #[test]
+    fn test_receiver_invalid_payload() {
+        let mut receiver = DtmfReceiver::new(101);
+        let result = receiver.process_packet(101, &[0x01, 0x02]);
+        assert!(result.is_none());
+    }
+
+    #[test]
     fn test_receiver_duplicate_end() {
         let mut receiver = DtmfReceiver::new(101);
 

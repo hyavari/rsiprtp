@@ -269,6 +269,11 @@ mod tests {
             .unwrap()
     }
 
+    fn parse_request(raw: &[u8]) -> SipRequest {
+        let msg = mdsiprtp_sip::SipMessage::parse(raw).unwrap();
+        msg.as_request().unwrap().clone()
+    }
+
     fn create_response(code: u16) -> SipResponse {
         let req = create_register();
         SipResponse::builder()
@@ -285,6 +290,22 @@ mod tests {
         let tx = NonInviteClientTransaction::new(req, false).unwrap();
         assert_eq!(tx.state(), State::Trying);
         assert!(!tx.is_terminated());
+    }
+
+    #[test]
+    fn test_new_transaction_missing_branch() {
+        let raw = b"REGISTER sip:example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+To: <sip:alice@example.com>\r\n\
+Call-ID: register@example.com\r\n\
+CSeq: 1 REGISTER\r\n\
+Contact: <sip:alice@192.168.1.1:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n";
+        let req = parse_request(raw);
+        let tx = NonInviteClientTransaction::new(req, false);
+        assert!(tx.is_none());
     }
 
     #[test]
@@ -336,6 +357,19 @@ mod tests {
         assert!(actions
             .iter()
             .any(|a| matches!(a, Action::SetTimer(Timer::K, _))));
+    }
+
+    #[test]
+    fn test_trying_response_below_100_ignored() {
+        let req = create_register();
+        let mut tx = NonInviteClientTransaction::new(req, false).unwrap();
+        tx.poll_actions();
+
+        let resp = create_response(99);
+        tx.handle_response(resp);
+
+        assert_eq!(tx.state(), State::Trying);
+        assert!(tx.poll_actions().is_empty());
     }
 
     #[test]
@@ -630,6 +664,24 @@ mod tests {
     }
 
     #[test]
+    fn test_proceeding_response_below_100_ignored() {
+        let req = create_register();
+        let mut tx = NonInviteClientTransaction::new(req, false).unwrap();
+        tx.poll_actions();
+
+        let provisional = create_response(100);
+        tx.handle_response(provisional);
+        tx.poll_actions();
+        assert_eq!(tx.state(), State::Proceeding);
+
+        let resp = create_response(99);
+        tx.handle_response(resp);
+
+        assert_eq!(tx.state(), State::Proceeding);
+        assert!(tx.poll_actions().is_empty());
+    }
+
+    #[test]
     fn test_reliable_transport_no_timer_e() {
         let req = create_register();
         let tx = NonInviteClientTransaction::new(req, true).unwrap();
@@ -655,6 +707,34 @@ mod tests {
         assert!(actions
             .iter()
             .any(|a| matches!(a, Action::SetTimer(Timer::E, _))));
+    }
+
+    #[test]
+    fn test_final_response_from_trying_unreliable() {
+        let req = create_register();
+        let mut tx = NonInviteClientTransaction::new(req, false).unwrap();
+        tx.poll_actions();
+
+        let resp = create_response(200);
+        tx.handle_response(resp);
+
+        assert_eq!(tx.state(), State::Completed);
+    }
+
+    #[test]
+    fn test_final_response_from_proceeding_unreliable() {
+        let req = create_register();
+        let mut tx = NonInviteClientTransaction::new(req, false).unwrap();
+        tx.poll_actions();
+
+        let resp = create_response(180);
+        tx.handle_response(resp);
+        assert_eq!(tx.state(), State::Proceeding);
+        tx.poll_actions();
+
+        let resp2 = create_response(200);
+        tx.handle_response(resp2);
+        assert_eq!(tx.state(), State::Completed);
     }
 
     #[test]

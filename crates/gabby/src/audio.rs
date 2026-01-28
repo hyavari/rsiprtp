@@ -71,12 +71,10 @@ impl Resampler {
 
             match self.resampler.process(&[chunk], None) {
                 Ok(resampled) => {
-                    if !resampled.is_empty() && !resampled[0].is_empty() {
-                        // Convert back to i16
-                        for &s in &resampled[0] {
-                            let clamped = s.clamp(-1.0, 1.0);
-                            output.push((clamped * i16::MAX as f32) as i16);
-                        }
+                    // Convert back to i16
+                    for &s in &resampled[0] {
+                        let clamped = s.clamp(-1.0, 1.0);
+                        output.push((clamped * i16::MAX as f32) as i16);
                     }
                 }
                 Err(e) => {
@@ -156,12 +154,8 @@ pub fn find_sentence_boundary(text: &str) -> Option<usize> {
 
     for (i, (byte_idx, c)) in chars.iter().enumerate() {
         if *c == '.' || *c == '!' || *c == '?' {
-            // End of string
-            if i == chars.len() - 1 {
-                return Some(byte_idx + c.len_utf8());
-            }
-            // Followed by whitespace
-            if i + 1 < chars.len() && chars[i + 1].1.is_whitespace() {
+            // End of string or followed by whitespace
+            if i == chars.len() - 1 || chars[i + 1].1.is_whitespace() {
                 return Some(byte_idx + c.len_utf8());
             }
         }
@@ -180,6 +174,17 @@ pub enum ResamplerError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Once;
+
+    fn init_tracing() {
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            let _ = tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::DEBUG)
+                .with_test_writer()
+                .try_init();
+        });
+    }
 
     #[test]
     fn test_calculate_rms() {
@@ -193,11 +198,19 @@ mod tests {
     }
 
     #[test]
+    fn test_calculate_rms_empty() {
+        assert_eq!(calculate_rms(&[]), 0.0);
+    }
+
+    #[test]
     fn test_find_sentence_boundary() {
         assert_eq!(find_sentence_boundary("Hello."), Some(6));
         assert_eq!(find_sentence_boundary("Hello. World"), Some(6));
         assert_eq!(find_sentence_boundary("Hello"), None);
         assert_eq!(find_sentence_boundary("What? Yes!"), Some(5));
+        assert_eq!(find_sentence_boundary("Wait?"), Some(5));
+        assert_eq!(find_sentence_boundary("Stop!"), Some(5));
+        assert_eq!(find_sentence_boundary("Hello.World"), None);
     }
 
     #[test]
@@ -207,5 +220,76 @@ mod tests {
 
         let noise: Vec<i16> = (0..160).map(|i| (i * 100) as i16).collect();
         assert!(!is_silence(&noise, 0.01));
+    }
+
+    #[test]
+    fn test_resampler_process_buffers_and_outputs() {
+        let mut resampler = Resampler::rtp_to_vosk().expect("create resampler");
+
+        let small_input = vec![0i16; 80];
+        let output = resampler.process(&small_input);
+        assert!(output.is_empty());
+
+        let full_input = vec![0i16; 160];
+        let output = resampler.process(&full_input);
+        assert!(!output.is_empty());
+    }
+
+    #[test]
+    fn test_resampler_flush_reset_and_rates() {
+        let mut resampler = Resampler::rtp_to_vosk().expect("create resampler");
+        let empty_flush = resampler.flush();
+        assert!(empty_flush.is_empty());
+
+        let small_input = vec![1000i16; 80];
+        let output = resampler.process(&small_input);
+        assert!(output.is_empty());
+
+        let flushed = resampler.flush();
+        assert!(!flushed.is_empty());
+
+        resampler.reset();
+        let empty_after_reset = resampler.flush();
+        assert!(empty_after_reset.is_empty());
+        let output_after_reset = resampler.process(&small_input);
+        assert!(output_after_reset.is_empty());
+        assert_eq!(resampler.input_rate(), 8000);
+        assert_eq!(resampler.output_rate(), 16000);
+    }
+
+    #[test]
+    fn test_resampler_vosk_to_rtp_and_silence() {
+        let resampler = Resampler::vosk_to_rtp().expect("create resampler");
+        assert_eq!(resampler.input_rate(), 16000);
+        assert_eq!(resampler.output_rate(), 8000);
+
+        let silence = generate_silence(5);
+        assert_eq!(silence, vec![0i16; 5]);
+    }
+
+    #[test]
+    fn test_resampler_process_handles_error() {
+        init_tracing();
+        let resampler =
+            FftFixedIn::<f32>::new(8000, 16000, 80, 1, 2).expect("create rubato resampler");
+        let mut bad_resampler = Resampler {
+            resampler,
+            input_rate: 8000,
+            output_rate: 16000,
+            chunk_size: 80,
+            buffer: Vec::new(),
+        };
+
+        let output = bad_resampler.process(&vec![0i16; 80]);
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn test_resampler_new_rejects_invalid_params() {
+        let err = Resampler::new(0, 0, 0)
+            .err()
+            .expect("invalid resampler params");
+        let message = format!("{err}");
+        assert!(message.contains("Failed to initialize resampler"));
     }
 }

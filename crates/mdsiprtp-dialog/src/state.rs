@@ -217,8 +217,9 @@ impl DialogInfo {
         local_contact: &str,
         state: DialogState,
     ) -> Option<Self> {
-        let id = DialogId::from_request_uas(request, local_tag)?;
-        let remote_uri = request.from_uri().ok()?.to_string();
+        let call_id = request.call_id().ok()?;
+        let (remote_tag, remote_uri) = request.from_tag_and_uri().ok()?;
+        let id = DialogId::new(&call_id, local_tag, &remote_tag);
         let local_uri = request.to_uri().ok()?.to_string();
         let remote_target = request.contact_uri()?.to_string();
         let remote_seq = request.cseq().ok()?;
@@ -238,7 +239,7 @@ impl DialogInfo {
             local_seq: 0, // Will be set when sending first in-dialog request
             remote_seq: Some(remote_seq),
             local_uri,
-            remote_uri,
+            remote_uri: remote_uri.to_string(),
             remote_target,
             route_set,
             secure,
@@ -249,7 +250,12 @@ impl DialogInfo {
     fn detect_secure_transport(request: &SipRequest) -> bool {
         let via_values = request.via_headers_raw();
         if let Some(first_via) = via_values.first() {
-            if let Ok(via) = Via::parse(first_via) {
+            let via_value = first_via
+                .trim()
+                .strip_prefix("Via:")
+                .unwrap_or(first_via)
+                .trim();
+            if let Ok(via) = Via::parse(via_value) {
                 return via.protocol.eq_ignore_ascii_case("TLS");
             }
         }
@@ -283,7 +289,7 @@ impl DialogInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mdsiprtp_sip::Method;
+    use mdsiprtp_sip::{Method, SipMessage};
 
     fn create_invite() -> SipRequest {
         SipRequest::builder()
@@ -297,6 +303,16 @@ mod tests {
             .contact("sip:alice@192.168.1.1:5060")
             .build()
             .unwrap()
+    }
+
+    fn parse_request(raw: &str) -> SipRequest {
+        let msg = SipMessage::parse(raw.as_bytes()).unwrap();
+        msg.as_request().unwrap().clone()
+    }
+
+    fn parse_response(raw: &str) -> SipResponse {
+        let msg = SipMessage::parse(raw.as_bytes()).unwrap();
+        msg.as_response().unwrap().clone()
     }
 
     fn create_response(request: &SipRequest) -> SipResponse {
@@ -321,6 +337,114 @@ mod tests {
     }
 
     #[test]
+    fn test_dialog_id_from_request_uac_missing_call_id() {
+        let invite = parse_request(
+            "INVITE sip:bob@example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+To: <sip:bob@example.com>\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:alice@192.168.1.1:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n",
+        );
+        let id = DialogId::from_request_uac(&invite, "remotetag");
+        assert!(id.is_none());
+    }
+
+    #[test]
+    fn test_dialog_id_from_request_uac_missing_from_tag() {
+        let invite = parse_request(
+            "INVITE sip:bob@example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest\r\n\
+From: <sip:alice@example.com>\r\n\
+To: <sip:bob@example.com>\r\n\
+Call-ID: test@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:alice@192.168.1.1:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n",
+        );
+        let id = DialogId::from_request_uac(&invite, "remotetag");
+        assert!(id.is_none());
+    }
+
+    #[test]
+    fn test_dialog_id_from_response_uac_missing_call_id() {
+        let response = parse_response(
+            "SIP/2.0 200 OK\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+To: <sip:bob@example.com>;tag=totag\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:bob@192.168.1.2:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n",
+        );
+        let id = DialogId::from_response_uac(&response);
+        assert!(id.is_none());
+    }
+
+    #[test]
+    fn test_dialog_id_from_response_uac_missing_from_tag() {
+        let response = parse_response(
+            "SIP/2.0 200 OK\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest\r\n\
+From: <sip:alice@example.com>\r\n\
+To: <sip:bob@example.com>;tag=totag\r\n\
+Call-ID: test@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:bob@192.168.1.2:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n",
+        );
+        let id = DialogId::from_response_uac(&response);
+        assert!(id.is_none());
+    }
+
+    #[test]
+    fn test_dialog_id_from_request_uas_missing_call_id() {
+        let invite = parse_request(
+            "INVITE sip:bob@example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+To: <sip:bob@example.com>\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:alice@192.168.1.1:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n",
+        );
+        let id = DialogId::from_request_uas(&invite, "localtag");
+        assert!(id.is_none());
+    }
+
+    #[test]
+    fn test_dialog_id_from_request_uas_missing_from_tag() {
+        let invite = parse_request(
+            "INVITE sip:bob@example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest\r\n\
+From: <sip:alice@example.com>\r\n\
+To: <sip:bob@example.com>\r\n\
+Call-ID: test@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:alice@192.168.1.1:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n",
+        );
+        let id = DialogId::from_request_uas(&invite, "mytag");
+        assert!(id.is_none());
+    }
+
+    #[test]
+    fn test_dialog_id_from_request_uac() {
+        let invite = create_invite();
+        let id = DialogId::from_request_uac(&invite, "remotetag").unwrap();
+        assert_eq!(id.call_id, "test@example.com");
+        assert_eq!(id.local_tag, "fromtag");
+        assert_eq!(id.remote_tag, "remotetag");
+    }
+
+    #[test]
     fn test_dialog_id_from_request_uas() {
         let invite = create_invite();
         let id = DialogId::from_request_uas(&invite, "mytag").unwrap();
@@ -328,6 +452,22 @@ mod tests {
         assert_eq!(id.call_id, "test@example.com");
         assert_eq!(id.local_tag, "mytag");
         assert_eq!(id.remote_tag, "fromtag");
+    }
+
+    #[test]
+    fn test_dialog_info_from_invite_uas_option() {
+        let invite = create_invite();
+        let info = DialogInfo::from_invite_uas(
+            &invite,
+            "localtag",
+            "sip:local@example.com",
+            DialogState::Early,
+        )
+        .unwrap();
+
+        assert_eq!(info.state, DialogState::Early);
+        assert_eq!(info.remote_seq, Some(1));
+        assert_eq!(info.remote_uri, "sip:alice@example.com");
     }
 
     #[test]
@@ -340,6 +480,253 @@ mod tests {
         assert_eq!(info.state, DialogState::Confirmed);
         assert_eq!(info.local_seq, 1);
         assert!(info.remote_seq.is_none());
+    }
+
+    #[test]
+    fn test_dialog_info_from_response_invalid_from_uri() {
+        let invite = parse_request(
+            "INVITE sip:bob@example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest\r\n\
+From: <sip:alice@[::1>;tag=fromtag\r\n\
+To: <sip:bob@example.com>\r\n\
+Call-ID: test@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:alice@192.168.1.1:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n",
+        );
+        assert!(invite.from_uri().is_err());
+        let response = parse_response(
+            "SIP/2.0 200 OK\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+To: <sip:bob@example.com>;tag=totag\r\n\
+Call-ID: test@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:bob@192.168.1.2:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n",
+        );
+        let info = DialogInfo::from_invite_response_uac(&invite, &response, DialogState::Confirmed);
+        assert!(info.is_none());
+    }
+
+    #[test]
+    fn test_dialog_info_from_response_invalid_to_uri() {
+        let invite = parse_request(
+            "INVITE sip:bob@example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+To: <sip:bob@[::1>\r\n\
+Call-ID: test@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:alice@192.168.1.1:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n",
+        );
+        assert!(invite.to_uri().is_err());
+        let response = parse_response(
+            "SIP/2.0 200 OK\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+To: <sip:bob@example.com>;tag=totag\r\n\
+Call-ID: test@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:bob@192.168.1.2:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n",
+        );
+        let info = DialogInfo::from_invite_response_uac(&invite, &response, DialogState::Confirmed);
+        assert!(info.is_none());
+    }
+
+    #[test]
+    fn test_dialog_info_from_response_missing_contact() {
+        let invite = create_invite();
+        let response = parse_response(
+            "SIP/2.0 200 OK\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+To: <sip:bob@example.com>;tag=totag\r\n\
+Call-ID: test@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Content-Length: 0\r\n\
+\r\n",
+        );
+        let info = DialogInfo::from_invite_response_uac(&invite, &response, DialogState::Confirmed);
+        assert!(info.is_none());
+    }
+
+    #[test]
+    fn test_dialog_info_from_response_invalid_cseq() {
+        let invite = parse_request(
+            "INVITE sip:bob@example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+To: <sip:bob@example.com>\r\n\
+Call-ID: test@example.com\r\n\
+CSeq: abc INVITE\r\n\
+Contact: <sip:alice@192.168.1.1:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n",
+        );
+        let response = create_response(&invite);
+        let info = DialogInfo::from_invite_response_uac(&invite, &response, DialogState::Confirmed);
+        assert!(info.is_none());
+    }
+
+    #[test]
+    fn test_dialog_info_from_invite_uas_invalid_from_uri() {
+        let invite = parse_request(
+            "INVITE sip:bob@example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest\r\n\
+From: <sip:alice@[::1>;tag=fromtag\r\n\
+To: <sip:bob@example.com>\r\n\
+Call-ID: test@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:alice@192.168.1.1:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n",
+        );
+        assert!(invite.from_uri().is_err());
+        let info = DialogInfo::from_invite_uas(
+            &invite,
+            "localtag",
+            "sip:local@example.com",
+            DialogState::Early,
+        );
+        assert!(info.is_none());
+    }
+
+    #[test]
+    fn test_dialog_info_from_invite_uas_invalid_to_uri() {
+        let invite = parse_request(
+            "INVITE sip:bob@example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+To: <sip:bob@[::1>\r\n\
+Call-ID: test@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:alice@192.168.1.1:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n",
+        );
+        let info = DialogInfo::from_invite_uas(
+            &invite,
+            "localtag",
+            "sip:local@example.com",
+            DialogState::Early,
+        );
+        assert!(info.is_none());
+    }
+
+    #[test]
+    fn test_dialog_info_from_invite_uas_invalid_contact() {
+        let invite = parse_request(
+            "INVITE sip:bob@example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+To: <sip:bob@example.com>\r\n\
+Call-ID: test@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:alice@[::1>\r\n\
+Content-Length: 0\r\n\
+\r\n",
+        );
+        let info = DialogInfo::from_invite_uas(
+            &invite,
+            "localtag",
+            "sip:local@example.com",
+            DialogState::Early,
+        );
+        assert!(info.is_none());
+    }
+
+    #[test]
+    fn test_dialog_info_from_invite_uas_invalid_cseq() {
+        let invite = parse_request(
+            "INVITE sip:bob@example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+To: <sip:bob@example.com>\r\n\
+Call-ID: test@example.com\r\n\
+CSeq: abc INVITE\r\n\
+Contact: <sip:alice@192.168.1.1:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n",
+        );
+        let info = DialogInfo::from_invite_uas(
+            &invite,
+            "localtag",
+            "sip:local@example.com",
+            DialogState::Early,
+        );
+        assert!(info.is_none());
+    }
+
+    #[test]
+    fn test_dialog_info_from_invite_uas_missing_call_id() {
+        let invite = parse_request(
+            "INVITE sip:bob@example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+To: <sip:bob@example.com>\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:alice@192.168.1.1:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n",
+        );
+        let info = DialogInfo::from_invite_uas(
+            &invite,
+            "localtag",
+            "sip:local@example.com",
+            DialogState::Early,
+        );
+        assert!(info.is_none());
+    }
+
+    #[test]
+    fn test_detect_secure_transport_prefix_via() {
+        let raw = "INVITE sip:bob@example.com SIP/2.0\r\n\
+Via: SIP/2.0/TLS 192.168.1.1:5061;branch=z9hG4bKtls\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+To: <sip:bob@example.com>\r\n\
+Call-ID: test@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:alice@192.168.1.1:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n";
+        let invite = parse_request(raw);
+        let info = DialogInfo::from_invite_uas(
+            &invite,
+            "localtag",
+            "sip:local@example.com",
+            DialogState::Early,
+        )
+        .unwrap();
+        assert!(info.secure);
+    }
+
+    #[test]
+    fn test_detect_secure_transport_prefix_via_lowercase() {
+        let raw = "INVITE sip:bob@example.com SIP/2.0\r\n\
+via: SIP/2.0/TLS 192.168.1.1:5061;branch=z9hG4bKtls\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+To: <sip:bob@example.com>\r\n\
+Call-ID: test@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:alice@192.168.1.1:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n";
+        let invite = parse_request(raw);
+        let info = DialogInfo::from_invite_uas(
+            &invite,
+            "localtag",
+            "sip:local@example.com",
+            DialogState::Early,
+        )
+        .unwrap();
+        assert!(info.secure);
     }
 
     #[test]
@@ -540,7 +927,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dialog_id_from_request_uac() {
+    fn test_dialog_id_from_request_uac_option() {
         let invite = create_invite();
         let id = DialogId::from_request_uac(&invite, "remote_tag");
 
@@ -558,6 +945,53 @@ mod tests {
         let invite = create_invite(); // Uses UDP
         let is_secure = DialogInfo::detect_secure_transport(&invite);
         assert!(!is_secure); // UDP is not secure
+    }
+
+    #[test]
+    fn test_dialog_info_secure_transport_tls() {
+        let invite = SipRequest::builder()
+            .method(Method::Invite)
+            .uri("sip:bob@example.com")
+            .via("192.168.1.1", 5061, "TLS", "z9hG4bKtest")
+            .from("sip:alice@example.com", "fromtag")
+            .to("sip:bob@example.com")
+            .call_id("test@example.com")
+            .cseq(1)
+            .build()
+            .unwrap();
+        let is_secure = DialogInfo::detect_secure_transport(&invite);
+        assert!(is_secure);
+    }
+
+    #[test]
+    fn test_dialog_info_secure_transport_missing_via() {
+        let msg = b"INVITE sip:bob@example.com SIP/2.0\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+To: <sip:bob@example.com>\r\n\
+Call-ID: test@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Content-Length: 0\r\n\
+\r\n";
+        let parsed = SipMessage::parse(msg).unwrap();
+        let invite = parsed.as_request().expect("expected request");
+        let is_secure = DialogInfo::detect_secure_transport(&invite);
+        assert!(!is_secure);
+    }
+
+    #[test]
+    fn test_dialog_info_secure_transport_invalid_via() {
+        let msg = b"INVITE sip:bob@example.com SIP/2.0\r\n\
+Via: INVALID\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+To: <sip:bob@example.com>\r\n\
+Call-ID: test@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Content-Length: 0\r\n\
+\r\n";
+        let parsed = SipMessage::parse(msg).unwrap();
+        let invite = parsed.as_request().expect("expected request");
+        let is_secure = DialogInfo::detect_secure_transport(&invite);
+        assert!(!is_secure);
     }
 
     #[test]

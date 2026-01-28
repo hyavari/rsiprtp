@@ -682,7 +682,22 @@ mod tests {
         // Try to hold again - should fail
         let result = manager.create_hold_request("call-1", false);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), HoldError::InvalidState(_)));
+        assert!(result.unwrap_err().to_string().contains("invalid state"));
+    }
+
+    #[test]
+    fn test_hold_manager_already_on_hold_both() {
+        let mut manager = HoldManager::new();
+        manager.add_call("call-1");
+
+        manager.create_hold_request("call-1", true).unwrap();
+        manager
+            .handle_hold_response("call-1", MediaDirection::Inactive)
+            .unwrap();
+
+        let result = manager.create_hold_request("call-1", true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("invalid state"));
     }
 
     #[test]
@@ -690,7 +705,7 @@ mod tests {
         let mut manager = HoldManager::new();
         let result = manager.create_hold_request("nonexistent", false);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), HoldError::CallNotFound(_)));
+        assert!(result.unwrap_err().to_string().contains("call not found"));
     }
 
     #[test]
@@ -700,7 +715,7 @@ mod tests {
 
         let result = manager.create_resume_request("call-1");
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), HoldError::InvalidState(_)));
+        assert!(result.unwrap_err().to_string().contains("invalid state"));
     }
 
     #[test]
@@ -708,7 +723,7 @@ mod tests {
         let mut manager = HoldManager::new();
         let result = manager.create_resume_request("nonexistent");
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), HoldError::CallNotFound(_)));
+        assert!(result.unwrap_err().to_string().contains("call not found"));
     }
 
     #[test]
@@ -724,7 +739,7 @@ mod tests {
         manager.add_call("call-1");
         let result = manager.handle_hold_response("call-1", MediaDirection::SendRecv);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), HoldError::InvalidState(_)));
+        assert!(result.unwrap_err().to_string().contains("invalid state"));
     }
 
     #[test]
@@ -905,6 +920,12 @@ mod tests {
     fn test_parse_sdp_direction_with_whitespace() {
         let sdp = "v=0\r\n  a=sendonly  \r\n";
         assert_eq!(parse_sdp_direction(sdp), MediaDirection::SendOnly);
+    }
+
+    #[test]
+    fn test_parse_sdp_direction_ignores_unknown_attribute() {
+        let sdp = "v=0\r\na=rtpmap:0 PCMU/8000\r\n";
+        assert_eq!(parse_sdp_direction(sdp), MediaDirection::SendRecv);
     }
 
     #[test]

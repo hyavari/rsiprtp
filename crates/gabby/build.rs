@@ -17,7 +17,9 @@ fn main() {
                     "cargo:warning=Run: powershell -ExecutionPolicy Bypass -File \"{script_path}\""
                 );
                 println!("cargo:warning=Then re-run: cargo build -p gabby");
-                println!("cargo:warning=Ensure the directory containing vosk.dll is on PATH at runtime.");
+                println!(
+                    "cargo:warning=Ensure the directory containing vosk.dll is on PATH at runtime."
+                );
             }
         }
     } else {

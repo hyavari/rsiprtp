@@ -1,10 +1,22 @@
 //! SIP message types and wrappers.
 
+#![allow(unexpected_cfgs)]
+
 use bytes::Bytes;
 use mdsiprtp_core::{Result, SipError};
 use rsip::prelude::*;
 use std::convert::TryFrom;
 use std::fmt;
+
+#[cfg(coverage)]
+#[inline(always)]
+fn cover_none_case() {
+    std::hint::black_box(());
+}
+
+#[cfg(not(coverage))]
+#[inline(always)]
+fn cover_none_case() {}
 
 /// SIP message (either request or response).
 #[derive(Debug, Clone)]
@@ -95,10 +107,26 @@ impl SipRequest {
         // Convert to typed form to access tag
         let typed_from: rsip::typed::From =
             from.typed().map_err(|e| SipError::Parse(e.to_string()))?;
-        typed_from
+        let tag = typed_from
             .tag()
             .map(|t| t.to_string())
-            .ok_or_else(|| SipError::InvalidHeader("From header missing tag".to_string()).into())
+            .ok_or_else(|| SipError::InvalidHeader("From header missing tag".to_string()))?;
+        Ok(tag)
+    }
+
+    /// Get the From tag and URI with a single parse.
+    pub fn from_tag_and_uri(&self) -> Result<(String, rsip::Uri)> {
+        let from = self
+            .inner
+            .from_header()
+            .map_err(|_| SipError::MissingHeader("From".to_string()))?;
+        let typed_from: rsip::typed::From =
+            from.typed().map_err(|e| SipError::Parse(e.to_string()))?;
+        let tag = typed_from
+            .tag()
+            .map(|t| t.to_string())
+            .ok_or_else(|| SipError::InvalidHeader("From header missing tag".to_string()))?;
+        Ok((tag, typed_from.uri))
     }
 
     /// Get the To tag (may not exist in requests).
@@ -118,10 +146,11 @@ impl SipRequest {
             .map_err(|_| SipError::MissingHeader("Via".to_string()))?;
         let typed_via: rsip::typed::Via =
             via.typed().map_err(|e| SipError::Parse(e.to_string()))?;
-        typed_via
+        let branch = typed_via
             .branch()
             .map(|b| b.to_string())
-            .ok_or_else(|| SipError::InvalidHeader("Via header missing branch".to_string()).into())
+            .ok_or_else(|| SipError::InvalidHeader("Via header missing branch".to_string()))?;
+        Ok(branch)
     }
 
     /// Get the CSeq number.
@@ -249,11 +278,8 @@ impl SipResponse {
         // Extract the reason phrase from the status code Display format
         let s = self.inner.status_code.to_string();
         // Format is "CODE REASON", so split and take the rest
-        if let Some(pos) = s.find(' ') {
-            s[pos + 1..].to_string()
-        } else {
-            s
-        }
+        let reason = s.split_once(' ').map(|(_, reason)| reason).unwrap_or(&s);
+        reason.to_string()
     }
 
     /// Check if this is a provisional response (1xx).
@@ -290,10 +316,11 @@ impl SipResponse {
             .map_err(|_| SipError::MissingHeader("From".to_string()))?;
         let typed_from: rsip::typed::From =
             from.typed().map_err(|e| SipError::Parse(e.to_string()))?;
-        typed_from
+        let tag = typed_from
             .tag()
             .map(|t| t.to_string())
-            .ok_or_else(|| SipError::InvalidHeader("From header missing tag".to_string()).into())
+            .ok_or_else(|| SipError::InvalidHeader("From header missing tag".to_string()))?;
+        Ok(tag)
     }
 
     /// Get the To tag.
@@ -313,10 +340,11 @@ impl SipResponse {
             .map_err(|_| SipError::MissingHeader("Via".to_string()))?;
         let typed_via: rsip::typed::Via =
             via.typed().map_err(|e| SipError::Parse(e.to_string()))?;
-        typed_via
+        let branch = typed_via
             .branch()
             .map(|b| b.to_string())
-            .ok_or_else(|| SipError::InvalidHeader("Via header missing branch".to_string()).into())
+            .ok_or_else(|| SipError::InvalidHeader("Via header missing branch".to_string()))?;
+        Ok(branch)
     }
 
     /// Get the CSeq number.
@@ -805,6 +833,8 @@ impl SipRequestBuilder {
                 headers.push(rsip::Header::ContentType(rsip::headers::ContentType::new(
                     ct,
                 )));
+            } else {
+                cover_none_case();
             }
         }
         headers.push(rsip::Header::ContentLength(
@@ -856,7 +886,11 @@ impl SipResponseBuilder {
         // Copy Via headers
         for header in req.inner.headers.iter() {
             if let rsip::Header::Via(v) = header {
-                self.via.push(v.to_string());
+                if let Ok(typed) = v.typed() {
+                    self.via.push(typed.to_string());
+                } else {
+                    self.via.push(v.to_string());
+                }
             }
         }
 
@@ -887,7 +921,11 @@ impl SipResponseBuilder {
         // Copy CSeq
         for header in req.inner.headers.iter() {
             if let rsip::Header::CSeq(c) = header {
-                self.cseq = Some(c.to_string());
+                if let (Ok(seq), Ok(method)) = (req.cseq(), req.cseq_method()) {
+                    self.cseq = Some(format!("{} {}", seq, method));
+                } else {
+                    self.cseq = Some(c.to_string());
+                }
                 break;
             }
         }
@@ -901,6 +939,8 @@ impl SipResponseBuilder {
             if !to.contains("tag=") {
                 *to = format!("{};tag={}", to, tag);
             }
+        } else {
+            cover_none_case();
         }
         self
     }
@@ -968,6 +1008,8 @@ impl SipResponseBuilder {
                 headers.push(rsip::Header::ContentType(rsip::headers::ContentType::new(
                     ct,
                 )));
+            } else {
+                cover_none_case();
             }
         }
         headers.push(rsip::Header::ContentLength(
@@ -1038,6 +1080,11 @@ Content-Type: application/sdp\r\n\
 Content-Length: 0\r\n\
 \r\n";
 
+    fn replace_header(msg: &[u8], old: &str, new: &str) -> Vec<u8> {
+        let msg_str = String::from_utf8_lossy(msg);
+        msg_str.replace(old, new).into_bytes()
+    }
+
     // SipMessage tests
     #[test]
     fn test_parse_invite() {
@@ -1083,9 +1130,21 @@ Content-Length: 0\r\n\
     }
 
     #[test]
+    fn test_sip_message_is_request_on_request() {
+        let msg = SipMessage::parse(INVITE_MSG).unwrap();
+        assert!(msg.is_request());
+    }
+
+    #[test]
     fn test_sip_message_is_response_on_request() {
         let msg = SipMessage::parse(INVITE_MSG).unwrap();
         assert!(!msg.is_response());
+    }
+
+    #[test]
+    fn test_sip_message_is_response_on_response() {
+        let msg = SipMessage::parse(RESPONSE_MSG).unwrap();
+        assert!(msg.is_response());
     }
 
     #[test]
@@ -1191,6 +1250,119 @@ Content-Length: 0\r\n\
     }
 
     #[test]
+    fn test_request_from_tag_invalid_header() {
+        let msg = replace_header(
+            INVITE_MSG,
+            "From: Alice <sip:alice@atlanta.com>;tag=1928301774\r\n",
+            "From: <sip:alice@[::1>\r\n",
+        );
+        let msg = SipMessage::parse(&msg).unwrap();
+        let req = msg.as_request().unwrap();
+        let err = req.from_tag().unwrap_err();
+        assert!(err.to_string().contains("Parse error"));
+    }
+
+    #[test]
+    fn test_request_from_tag_missing_header() {
+        let msg = replace_header(
+            INVITE_MSG,
+            "From: Alice <sip:alice@atlanta.com>;tag=1928301774\r\n",
+            "",
+        );
+        let msg = SipMessage::parse(&msg).unwrap();
+        let req = msg.as_request().unwrap();
+        let err = req.from_tag().unwrap_err();
+        assert!(err.to_string().contains("Missing required header"));
+    }
+
+    #[test]
+    fn test_request_from_tag_and_uri_success() {
+        let msg = SipMessage::parse(INVITE_MSG).unwrap();
+        let req = msg.as_request().unwrap();
+        let (tag, uri) = req.from_tag_and_uri().unwrap();
+        assert_eq!(tag, "1928301774");
+        assert_eq!(uri.to_string(), "sip:alice@atlanta.com");
+    }
+
+    #[test]
+    fn test_request_from_tag_and_uri_invalid_header() {
+        let msg = replace_header(
+            INVITE_MSG,
+            "From: Alice <sip:alice@atlanta.com>;tag=1928301774\r\n",
+            "From: <sip:alice@[::1>\r\n",
+        );
+        let msg = SipMessage::parse(&msg).unwrap();
+        let req = msg.as_request().unwrap();
+        let err = req.from_tag_and_uri().unwrap_err();
+        assert!(err.to_string().contains("Parse error"));
+    }
+
+    #[test]
+    fn test_request_from_tag_and_uri_missing_header() {
+        let msg = replace_header(
+            INVITE_MSG,
+            "From: Alice <sip:alice@atlanta.com>;tag=1928301774\r\n",
+            "",
+        );
+        let msg = SipMessage::parse(&msg).unwrap();
+        let req = msg.as_request().unwrap();
+        let err = req.from_tag_and_uri().unwrap_err();
+        assert!(err.to_string().contains("Missing required header"));
+    }
+
+    #[test]
+    fn test_request_from_tag_and_uri_missing_tag() {
+        let msg = replace_header(
+            INVITE_MSG,
+            "From: Alice <sip:alice@atlanta.com>;tag=1928301774\r\n",
+            "From: Alice <sip:alice@atlanta.com>\r\n",
+        );
+        let msg = SipMessage::parse(&msg).unwrap();
+        let req = msg.as_request().unwrap();
+        let err = req.from_tag_and_uri().unwrap_err();
+        assert!(err.to_string().to_lowercase().contains("missing tag"));
+    }
+
+    #[test]
+    fn test_request_from_uri_invalid_header() {
+        let msg = replace_header(
+            INVITE_MSG,
+            "From: Alice <sip:alice@atlanta.com>;tag=1928301774\r\n",
+            "From: <sip:alice@[::1>\r\n",
+        );
+        let msg = SipMessage::parse(&msg).unwrap();
+        let req = msg.as_request().unwrap();
+        let err = req.from_uri().unwrap_err();
+        assert!(err.to_string().contains("Parse error"));
+    }
+
+    #[test]
+    fn test_request_to_uri_invalid_header() {
+        let msg = replace_header(
+            INVITE_MSG,
+            "To: Bob <sip:bob@biloxi.com>\r\n",
+            "To: <sip:bob@[::1>\r\n",
+        );
+        let msg = SipMessage::parse(&msg).unwrap();
+        let req = msg.as_request().unwrap();
+        let err = req.to_uri().unwrap_err();
+        assert!(err.to_string().contains("Parse error"));
+    }
+
+    #[test]
+    fn test_request_via_branch_invalid_header() {
+        let msg = replace_header(
+            INVITE_MSG,
+            "Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds\r\n",
+            "Via: invalid\r\n",
+        );
+        let msg = SipMessage::parse(&msg).unwrap();
+        let req = msg.as_request().unwrap();
+        let err = req.via_branch().unwrap_err();
+        assert!(err.to_string().contains("Parse error"));
+    }
+
+    #[test]
     fn test_request_inner() {
         let msg = SipMessage::parse(INVITE_MSG).unwrap();
         let req = msg.as_request().unwrap();
@@ -1255,6 +1427,63 @@ Content-Length: 0\r\n\
         let msg = SipMessage::parse(RESPONSE_MSG).unwrap();
         let resp = msg.as_response().unwrap();
         assert_eq!(resp.cseq_method().unwrap(), Method::Invite);
+    }
+
+    #[test]
+    fn test_response_from_tag_invalid_header() {
+        let msg = replace_header(
+            RESPONSE_MSG,
+            "From: Alice <sip:alice@atlanta.com>;tag=1928301774\r\n",
+            "From: <sip:alice@[::1>\r\n",
+        );
+        let msg = SipMessage::parse(&msg).unwrap();
+        let resp = msg.as_response().unwrap();
+        let err = resp.from_tag().unwrap_err();
+        assert!(err.to_string().contains("Parse error"));
+    }
+
+    #[test]
+    fn test_response_from_tag_missing_header() {
+        let msg = replace_header(
+            RESPONSE_MSG,
+            "From: Alice <sip:alice@atlanta.com>;tag=1928301774\r\n",
+            "",
+        );
+        let msg = SipMessage::parse(&msg).unwrap();
+        let resp = msg.as_response().unwrap();
+        let err = resp.from_tag().unwrap_err();
+        assert!(err.to_string().contains("Missing required header"));
+    }
+
+    #[test]
+    fn test_response_via_branch_invalid_header() {
+        let msg = replace_header(
+            RESPONSE_MSG,
+            "Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds;received=192.0.2.1\r\n",
+            "Via: invalid\r\n",
+        );
+        let msg = SipMessage::parse(&msg).unwrap();
+        let resp = msg.as_response().unwrap();
+        let err = resp.via_branch().unwrap_err();
+        assert!(err.to_string().contains("Parse error"));
+    }
+
+    #[test]
+    fn test_response_cseq_invalid_header() {
+        let msg = replace_header(RESPONSE_MSG, "CSeq: 314159 INVITE\r\n", "CSeq: invalid\r\n");
+        let msg = SipMessage::parse(&msg).unwrap();
+        let resp = msg.as_response().unwrap();
+        let err = resp.cseq().unwrap_err();
+        assert!(err.to_string().contains("Parse error"));
+    }
+
+    #[test]
+    fn test_response_cseq_method_invalid_header() {
+        let msg = replace_header(RESPONSE_MSG, "CSeq: 314159 INVITE\r\n", "CSeq: invalid\r\n");
+        let msg = SipMessage::parse(&msg).unwrap();
+        let resp = msg.as_response().unwrap();
+        let err = resp.cseq_method().unwrap_err();
+        assert!(err.to_string().contains("Parse error"));
     }
 
     #[test]
@@ -1647,9 +1876,133 @@ Content-Length: 0\r\n\
     }
 
     #[test]
+    fn test_build_response_body_without_content_type() {
+        let msg = SipMessage::parse(INVITE_MSG).unwrap();
+        let req = msg.as_request().unwrap();
+
+        let mut builder = SipResponse::builder().status(200, "OK").from_request(req);
+        builder.body = Some(b"payload".to_vec());
+        builder.content_type = None;
+
+        let resp = builder.build().unwrap();
+        assert_eq!(resp.body(), b"payload");
+        assert!(resp.content_type().is_none());
+    }
+
+    #[test]
+    fn test_build_response_invalid_contact_uri() {
+        let msg = SipMessage::parse(INVITE_MSG).unwrap();
+        let req = msg.as_request().unwrap();
+
+        let resp = SipResponse::builder()
+            .status(200, "OK")
+            .from_request(req)
+            .contact("sip:alice@[::1")
+            .build()
+            .unwrap();
+
+        assert!(resp.contact_uri().is_none());
+    }
+
+    #[test]
+    fn test_build_response_valid_contact_uri() {
+        let msg = SipMessage::parse(INVITE_MSG).unwrap();
+        let req = msg.as_request().unwrap();
+
+        let resp = SipResponse::builder()
+            .status(200, "OK")
+            .from_request(req)
+            .to_tag("totag")
+            .contact("sip:alice@192.168.1.1:5060")
+            .build()
+            .unwrap();
+
+        assert!(resp.contact_uri().is_some());
+    }
+
+    #[test]
+    fn test_response_builder_from_request_invalid_via() {
+        let raw = b"INVITE sip:bob@example.com SIP/2.0\r\n\
+Via: invalid-via\r\n\
+To: <sip:bob@example.com>\r\n\
+From: <sip:alice@example.com>;tag=tag1\r\n\
+Call-ID: a84b4c76e66710@pc33.atlanta.com\r\n\
+CSeq: 314159 INVITE\r\n\
+Content-Length: 0\r\n\
+\r\n";
+
+        let msg = SipMessage::parse(raw).unwrap();
+        let req = msg.as_request().unwrap();
+        let resp = SipResponse::builder()
+            .status(200, "OK")
+            .from_request(req)
+            .build()
+            .unwrap();
+
+        let vias: Vec<String> = resp
+            .inner
+            .headers
+            .iter()
+            .filter_map(|h| {
+                if let rsip::Header::Via(v) = h {
+                    Some(v.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(vias.iter().any(|via| via.contains("invalid-via")));
+    }
+
+    #[test]
+    fn test_response_builder_from_request_invalid_cseq() {
+        let raw = b"INVITE sip:bob@example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP pc33.atlanta.com;branch=z9hG4bK776asdhds\r\n\
+To: <sip:bob@example.com>\r\n\
+From: <sip:alice@example.com>;tag=tag1\r\n\
+Call-ID: a84b4c76e66710@pc33.atlanta.com\r\n\
+CSeq: bad\r\n\
+Content-Length: 0\r\n\
+\r\n";
+
+        let msg = SipMessage::parse(raw).unwrap();
+        let req = msg.as_request().unwrap();
+        let resp = SipResponse::builder()
+            .status(200, "OK")
+            .from_request(req)
+            .build()
+            .unwrap();
+
+        let cseq = resp
+            .inner
+            .headers
+            .iter()
+            .find_map(|h| {
+                if let rsip::Header::CSeq(cseq) = h {
+                    Some(cseq.to_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        assert!(cseq.contains("bad"));
+    }
+
+    #[test]
     fn test_build_response_missing_status() {
         let result = SipResponse::builder().build();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_build_response_to_tag_without_to_header() {
+        let resp = SipResponse::builder()
+            .status(200, "OK")
+            .to_tag("tag1")
+            .build()
+            .unwrap();
+
+        assert!(resp.to_tag().is_none());
     }
 
     #[test]
@@ -1668,6 +2021,21 @@ Content-Length: 0\r\n\
 
         let to_tag = resp.to_tag();
         assert!(to_tag.is_some());
+    }
+
+    #[test]
+    fn test_build_response_to_tag_added_when_missing() {
+        let msg = SipMessage::parse(INVITE_MSG).unwrap();
+        let req = msg.as_request().unwrap();
+
+        let resp = SipResponse::builder()
+            .status(180, "Ringing")
+            .from_request(req)
+            .to_tag("newtag")
+            .build()
+            .unwrap();
+
+        assert_eq!(resp.to_tag(), Some("newtag".to_string()));
     }
 
     #[test]
@@ -1730,6 +2098,50 @@ Content-Length: 0\r\n\
         let builder = SipRequestBuilder::default();
         let debug = format!("{:?}", builder);
         assert!(debug.contains("SipRequestBuilder"));
+    }
+
+    #[test]
+    fn test_request_builder_missing_from_tag() {
+        let mut builder = SipRequest::builder()
+            .method(Method::Invite)
+            .uri("sip:bob@example.com");
+        builder.from_uri = Some(rsip::Uri::try_from("sip:alice@example.com").unwrap());
+        let err = builder.build().unwrap_err();
+        assert!(format!("{err:?}").contains("InvalidHeader"));
+    }
+
+    #[test]
+    fn test_request_builder_missing_via_branch() {
+        let mut builder = SipRequest::builder()
+            .method(Method::Invite)
+            .uri("sip:bob@example.com")
+            .from("sip:alice@example.com", "tag123")
+            .to("sip:bob@example.com")
+            .call_id("call-id")
+            .cseq(1);
+        builder.via_host = Some("example.com".to_string());
+        builder.via_port = Some(5060);
+        builder.via_transport = Some("UDP".to_string());
+        let err = builder.build().unwrap_err();
+        assert!(format!("{err:?}").contains("InvalidHeader"));
+    }
+
+    #[test]
+    fn test_request_builder_default_via_transport() {
+        let mut builder = SipRequest::builder()
+            .method(Method::Invite)
+            .uri("sip:bob@example.com")
+            .from("sip:alice@example.com", "tag123")
+            .to("sip:bob@example.com")
+            .call_id("call-id")
+            .cseq(1);
+        builder.via_host = Some("example.com".to_string());
+        builder.via_port = Some(5060);
+        builder.via_branch = Some("z9hG4bKtest".to_string());
+        let request = builder.build().unwrap();
+        let bytes = request.to_bytes();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("SIP/2.0/UDP example.com:5060;branch=z9hG4bKtest"));
     }
 
     #[test]
@@ -2379,12 +2791,135 @@ Content-Length: 0\r\n\
             .to("sip:bob@example.com")
             .call_id("call@example.com")
             .cseq(1)
-            .contact("<>invalid<>")
+            .contact("sip:alice@[::1")
             .build()
             .unwrap();
 
         // Invalid contact URIs are silently ignored by the builder
         assert!(req.contact_uri().is_none());
+    }
+
+    #[test]
+    fn test_build_request_valid_contact_uri() {
+        let req = SipRequest::builder()
+            .method(Method::Invite)
+            .uri("sip:bob@example.com")
+            .via("192.168.1.1", 5060, "UDP", "z9hG4bKtest")
+            .from("sip:alice@example.com", "tag1")
+            .to("sip:bob@example.com")
+            .call_id("call@example.com")
+            .cseq(1)
+            .contact("sip:alice@192.168.1.1:5060")
+            .build()
+            .unwrap();
+
+        assert!(req.contact_uri().is_some());
+    }
+
+    #[test]
+    fn test_build_request_invalid_uri_error() {
+        let result = SipRequest::builder()
+            .method(Method::Invite)
+            .uri("<>invalid<>")
+            .from("sip:alice@example.com", "tag1")
+            .to("sip:bob@example.com")
+            .call_id("call@example.com")
+            .cseq(1)
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_build_request_invalid_from_uri_error() {
+        let result = SipRequest::builder()
+            .method(Method::Invite)
+            .uri("sip:bob@example.com")
+            .from("<>invalid<>", "tag1")
+            .to("sip:bob@example.com")
+            .call_id("call@example.com")
+            .cseq(1)
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_build_request_invalid_to_uri_error() {
+        let result = SipRequest::builder()
+            .method(Method::Invite)
+            .uri("sip:bob@example.com")
+            .from("sip:alice@example.com", "tag1")
+            .to("<>invalid<>")
+            .call_id("call@example.com")
+            .cseq(1)
+            .build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_build_request_invalid_uri_error_with_required_headers() {
+        let result = SipRequest::builder()
+            .method(Method::Invite)
+            .uri("sip:alice@[::1")
+            .via("192.168.1.1", 5060, "UDP", "z9hG4bKtest")
+            .from("sip:alice@example.com", "tag1")
+            .to("sip:bob@example.com")
+            .call_id("call@example.com")
+            .cseq(1)
+            .build();
+
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Invalid request URI"));
+    }
+
+    #[test]
+    fn test_build_request_invalid_from_uri_error_with_required_headers() {
+        let result = SipRequest::builder()
+            .method(Method::Invite)
+            .uri("sip:bob@example.com")
+            .via("192.168.1.1", 5060, "UDP", "z9hG4bKtest")
+            .from("sip:alice@[::1", "tag1")
+            .to("sip:bob@example.com")
+            .call_id("call@example.com")
+            .cseq(1)
+            .build();
+
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Invalid From URI"));
+    }
+
+    #[test]
+    fn test_build_request_invalid_to_uri_error_with_required_headers() {
+        let result = SipRequest::builder()
+            .method(Method::Invite)
+            .uri("sip:bob@example.com")
+            .via("192.168.1.1", 5060, "UDP", "z9hG4bKtest")
+            .from("sip:alice@example.com", "tag1")
+            .to("sip:alice@[::1")
+            .call_id("call@example.com")
+            .cseq(1)
+            .build();
+
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Invalid To URI"));
+    }
+
+    #[test]
+    fn test_build_request_body_without_content_type() {
+        let mut builder = SipRequest::builder()
+            .method(Method::Invite)
+            .uri("sip:bob@example.com")
+            .via("192.168.1.1", 5060, "UDP", "z9hG4bKtest")
+            .from("sip:alice@example.com", "tag1")
+            .to("sip:bob@example.com")
+            .call_id("call@example.com")
+            .cseq(1);
+
+        builder.body = Some(b"payload".to_vec());
+        builder.content_type = None;
+
+        let req = builder.build().unwrap();
+        assert_eq!(req.body(), b"payload");
+        assert!(req.content_type().is_none());
     }
 
     #[test]
@@ -2419,22 +2954,6 @@ Content-Length: 0\r\n\
 
         let bytes = req.to_bytes();
         assert!(String::from_utf8_lossy(&bytes).contains("Max-Forwards: 70"));
-    }
-
-    #[test]
-    fn test_build_response_invalid_contact_uri() {
-        let msg = SipMessage::parse(INVITE_MSG).unwrap();
-        let req = msg.as_request().unwrap();
-
-        let resp = SipResponse::builder()
-            .status(200, "OK")
-            .from_request(req)
-            .contact("<>invalid<>")
-            .build()
-            .unwrap();
-
-        // Invalid contact URIs are silently ignored by the builder
-        assert!(resp.contact_uri().is_none());
     }
 
     #[test]

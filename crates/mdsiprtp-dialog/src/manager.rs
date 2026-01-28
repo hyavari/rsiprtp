@@ -269,6 +269,7 @@ impl DialogManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mdsiprtp_sip::SipMessage;
 
     fn create_invite() -> SipRequest {
         SipRequest::builder()
@@ -294,6 +295,16 @@ mod tests {
             .unwrap()
     }
 
+    fn parse_request(raw: &str) -> SipRequest {
+        let msg = SipMessage::parse(raw.as_bytes()).unwrap();
+        msg.as_request().unwrap().clone()
+    }
+
+    fn parse_response(raw: &str) -> SipResponse {
+        let msg = SipMessage::parse(raw.as_bytes()).unwrap();
+        msg.as_response().unwrap().clone()
+    }
+
     #[test]
     fn test_create_uac_dialog() {
         let mut mgr = DialogManager::new("sip:me@192.168.1.1:5060");
@@ -304,6 +315,55 @@ mod tests {
 
         let dialog = mgr.dialog(handle).unwrap();
         assert_eq!(dialog.role(), Role::Uac);
+    }
+
+    #[test]
+    fn test_create_dialog_missing_call_id() {
+        let mut mgr = DialogManager::new("sip:me@192.168.1.1:5060");
+        let invite = parse_request(
+            "INVITE sip:bob@example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+To: <sip:bob@example.com>\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:alice@192.168.1.1:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n",
+        );
+        assert!(mgr.create_dialog(invite).is_none());
+    }
+
+    #[test]
+    fn test_create_dialog_missing_from_tag() {
+        let mut mgr = DialogManager::new("sip:me@192.168.1.1:5060");
+        let invite = parse_request(
+            "INVITE sip:bob@example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest\r\n\
+From: <sip:alice@example.com>\r\n\
+To: <sip:bob@example.com>\r\n\
+Call-ID: test@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:alice@192.168.1.1:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n",
+        );
+        assert!(mgr.create_dialog(invite).is_none());
+    }
+
+    #[test]
+    fn test_handle_request_missing_call_id_non_invite() {
+        let req = parse_request(
+            "BYE sip:bob@example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest\r\n\
+To: <sip:bob@example.com>;tag=totag\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+CSeq: 1 BYE\r\n\
+Content-Length: 0\r\n\
+\r\n",
+        );
+        let mut manager = DialogManager::new("sip:me@192.168.1.1:5060");
+        let handle = manager.handle_request(req);
+        assert!(handle.is_none());
     }
 
     #[test]
@@ -319,6 +379,56 @@ mod tests {
 
         let dialog = mgr.dialog(handle).unwrap();
         assert_eq!(dialog.state(), DialogState::Confirmed);
+    }
+
+    #[test]
+    fn test_handle_response_missing_call_id() {
+        let mut mgr = DialogManager::new("sip:me@192.168.1.1:5060");
+        let response = parse_response(
+            "SIP/2.0 200 OK\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+To: <sip:bob@example.com>;tag=totag\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:bob@192.168.1.2:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n",
+        );
+        assert!(mgr.handle_response(response).is_none());
+    }
+
+    #[test]
+    fn test_handle_response_missing_from_tag() {
+        let mut mgr = DialogManager::new("sip:me@192.168.1.1:5060");
+        let response = parse_response(
+            "SIP/2.0 200 OK\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest\r\n\
+From: <sip:alice@example.com>\r\n\
+To: <sip:bob@example.com>;tag=totag\r\n\
+Call-ID: test@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:bob@192.168.1.2:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n",
+        );
+        assert!(mgr.handle_response(response).is_none());
+    }
+
+    #[test]
+    fn test_handle_response_session_progress_event() {
+        let mut mgr = DialogManager::new("sip:me@192.168.1.1:5060");
+        let invite = create_invite();
+
+        let handle = mgr.create_dialog(invite.clone()).unwrap();
+        let response = create_response(&invite, 183);
+
+        let result_handle = mgr.handle_response(response).unwrap();
+        assert_eq!(result_handle, handle);
+
+        let actions = mgr.poll_actions();
+        assert!(actions
+            .iter()
+            .any(|a| matches!(a, ManagerAction::Event(_, ManagerEvent::SessionProgress(_)))));
     }
 
     #[test]
@@ -339,6 +449,66 @@ mod tests {
     }
 
     #[test]
+    fn test_incoming_invite_missing_from_tag() {
+        let mut mgr = DialogManager::new("sip:me@192.168.1.2:5060");
+        let invite = parse_request(
+            "INVITE sip:bob@example.com SIP/2.0\r\n\
+Via: SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest\r\n\
+From: <sip:alice@example.com>\r\n\
+To: <sip:bob@example.com>\r\n\
+Call-ID: test@example.com\r\n\
+CSeq: 1 INVITE\r\n\
+Contact: <sip:alice@192.168.1.1:5060>\r\n\
+Content-Length: 0\r\n\
+\r\n",
+        );
+        let handle = mgr.handle_request(invite);
+        assert!(handle.is_none());
+    }
+
+    #[test]
+    fn test_handle_request_reinvite_event() {
+        let mut mgr = DialogManager::new("sip:me@192.168.1.2:5060");
+        let invite = create_invite();
+
+        let handle = mgr.handle_request(invite.clone()).unwrap();
+        let dialog = mgr.dialog(handle).unwrap();
+        let local_tag = dialog.id().local_tag.clone();
+        let remote_tag = dialog.id().remote_tag.clone();
+        let call_id = dialog.id().call_id.clone();
+
+        let response = SipResponse::builder()
+            .status(200, "OK")
+            .from_request(&invite)
+            .to_tag(&local_tag)
+            .contact("sip:bob@192.168.1.2:5060")
+            .build()
+            .unwrap();
+        mgr.send_response(handle, response);
+        mgr.poll_actions();
+
+        let reinvite = SipRequest::builder()
+            .method(Method::Invite)
+            .uri("sip:bob@example.com")
+            .via("192.168.1.1", 5060, "UDP", "z9hG4bKreinvite")
+            .from("sip:alice@example.com", &remote_tag)
+            .to("sip:bob@example.com")
+            .to_tag(&local_tag)
+            .call_id(&call_id)
+            .cseq(2)
+            .build()
+            .unwrap();
+
+        let result_handle = mgr.handle_request(reinvite).unwrap();
+        assert_eq!(result_handle, handle);
+
+        let actions = mgr.poll_actions();
+        assert!(actions
+            .iter()
+            .any(|a| matches!(a, ManagerAction::Event(_, ManagerEvent::ReInvite(_)))));
+    }
+
+    #[test]
     fn test_send_200_establishes_dialog() {
         let mut mgr = DialogManager::new("sip:me@192.168.1.2:5060");
         let invite = create_invite();
@@ -356,6 +526,60 @@ mod tests {
 
         mgr.send_response(handle, response);
 
+        let dialog = mgr.dialog(handle).unwrap();
+        assert_eq!(dialog.state(), DialogState::Confirmed);
+    }
+
+    #[test]
+    fn test_send_response_provisional_does_not_confirm() {
+        let mut mgr = DialogManager::new("sip:me@192.168.1.2:5060");
+        let invite = create_invite();
+
+        let handle = mgr.handle_request(invite.clone()).unwrap();
+        mgr.poll_actions();
+
+        let response = SipResponse::builder()
+            .status(180, "Ringing")
+            .from_request(&invite)
+            .to_tag("localtag")
+            .contact("sip:bob@192.168.1.2:5060")
+            .build()
+            .unwrap();
+
+        mgr.send_response(handle, response);
+
+        let dialog = mgr.dialog(handle).unwrap();
+        assert_eq!(dialog.state(), DialogState::Early);
+    }
+
+    #[test]
+    fn test_send_response_after_confirmed_does_not_remap() {
+        let mut mgr = DialogManager::new("sip:me@192.168.1.2:5060");
+        let invite = create_invite();
+
+        let handle = mgr.handle_request(invite.clone()).unwrap();
+        mgr.poll_actions();
+
+        let response = SipResponse::builder()
+            .status(200, "OK")
+            .from_request(&invite)
+            .to_tag("localtag")
+            .contact("sip:bob@192.168.1.2:5060")
+            .build()
+            .unwrap();
+
+        mgr.send_response(handle, response);
+        mgr.poll_actions();
+
+        let response = SipResponse::builder()
+            .status(200, "OK")
+            .from_request(&invite)
+            .to_tag("localtag")
+            .contact("sip:bob@192.168.1.2:5060")
+            .build()
+            .unwrap();
+
+        mgr.send_response(handle, response);
         let dialog = mgr.dialog(handle).unwrap();
         assert_eq!(dialog.state(), DialogState::Confirmed);
     }
@@ -410,10 +634,8 @@ mod tests {
     fn test_manager_action_clone() {
         let action = ManagerAction::Event(DialogHandle(1), ManagerEvent::Established);
         let cloned = action.clone();
-        assert!(matches!(
-            cloned,
-            ManagerAction::Event(_, ManagerEvent::Established)
-        ));
+        let debug = format!("{:?}", cloned);
+        assert!(debug.contains("Established"));
     }
 
     #[test]
@@ -429,7 +651,8 @@ mod tests {
     fn test_manager_event_clone() {
         let event = ManagerEvent::Established;
         let cloned = event.clone();
-        assert!(matches!(cloned, ManagerEvent::Established));
+        let debug = format!("{:?}", cloned);
+        assert!(debug.contains("Established"));
     }
 
     #[test]
@@ -518,6 +741,83 @@ mod tests {
 
         let result = mgr.handle_request(bye);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_handle_request_missing_dialog_entry() {
+        let mut mgr = DialogManager::new("sip:me@192.168.1.2:5060");
+        let handle = DialogHandle(42);
+        let id = DialogId::new("test@example.com", "totag", "fromtag");
+        mgr.id_to_handle.insert(id, handle);
+
+        let bye = SipRequest::builder()
+            .method(Method::Bye)
+            .uri("sip:bob@192.168.1.2:5060")
+            .via("192.168.1.1", 5060, "UDP", "z9hG4bKbye")
+            .from("sip:alice@example.com", "fromtag")
+            .to("sip:bob@example.com")
+            .to_tag("totag")
+            .call_id("test@example.com")
+            .cseq(1)
+            .build()
+            .unwrap();
+
+        let result = mgr.handle_request(bye);
+        assert_eq!(result, Some(handle));
+        assert!(mgr.dialog(handle).is_none());
+    }
+
+    #[test]
+    fn test_handle_response_without_pending_or_to_tag() {
+        let mut mgr = DialogManager::new("sip:me@192.168.1.1:5060");
+        let invite = create_invite();
+
+        // Response has no to-tag and there's no pending dialog.
+        let response = SipResponse::builder()
+            .status(200, "OK")
+            .from_request(&invite)
+            .build()
+            .unwrap();
+
+        let result = mgr.handle_response(response);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_handle_response_missing_dialog_entry() {
+        let mut mgr = DialogManager::new("sip:me@192.168.1.1:5060");
+        let invite = create_invite();
+
+        let handle = mgr.create_dialog(invite.clone()).unwrap();
+        let response = create_response(&invite, 200);
+
+        mgr.dialogs.remove(&handle);
+
+        let result = mgr.handle_response(response);
+        assert_eq!(result, Some(handle));
+        assert!(mgr.dialog(handle).is_none());
+    }
+
+    #[test]
+    fn test_handle_response_uses_established_mapping() {
+        let mut mgr = DialogManager::new("sip:me@192.168.1.1:5060");
+        let invite = create_invite();
+
+        let handle = mgr.create_dialog(invite.clone()).unwrap();
+        let response = create_response(&invite, 200);
+        mgr.handle_response(response);
+
+        // New response should use established dialog mapping (pending removed).
+        let followup = create_response(&invite, 200);
+        let result = mgr.handle_response(followup).unwrap();
+        assert_eq!(result, handle);
+    }
+
+    #[test]
+    fn test_send_bye_unknown_handle_returns_none() {
+        let mut mgr = DialogManager::new("sip:me@192.168.1.1:5060");
+        let bye = mgr.send_bye(DialogHandle(999));
+        assert!(bye.is_none());
     }
 
     #[test]
@@ -611,6 +911,13 @@ mod tests {
     }
 
     #[test]
+    fn test_collect_dialog_actions_missing_handle() {
+        let mut mgr = DialogManager::new("sip:me@192.168.1.1:5060");
+        mgr.collect_dialog_actions(DialogHandle(999));
+        assert!(mgr.poll_actions().is_empty());
+    }
+
+    #[test]
     fn test_cleanup_terminated() {
         let mut mgr = DialogManager::new("sip:me@192.168.1.1:5060");
         let invite = create_invite();
@@ -630,6 +937,17 @@ mod tests {
 
         // Dialog should be removed
         assert!(mgr.dialog(handle).is_none());
+    }
+
+    #[test]
+    fn test_cleanup_terminated_noop_for_active() {
+        let mut mgr = DialogManager::new("sip:me@192.168.1.1:5060");
+        let invite = create_invite();
+
+        let handle = mgr.create_dialog(invite).unwrap();
+        mgr.cleanup_terminated();
+
+        assert!(mgr.dialog(handle).is_some());
     }
 
     #[test]

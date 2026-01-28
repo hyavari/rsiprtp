@@ -6,9 +6,15 @@ use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
+trait WriteSeek: Write + Seek + Send {}
+impl<T: Write + Seek + Send> WriteSeek for T {}
+
+trait ReadSeek: Read + Seek + Send {}
+impl<T: Read + Seek + Send> ReadSeek for T {}
+
 /// WAV file writer for recording audio.
 pub struct WavWriter {
-    writer: BufWriter<File>,
+    writer: BufWriter<Box<dyn WriteSeek>>,
     sample_rate: u32,
     channels: u16,
     bits_per_sample: u16,
@@ -30,9 +36,16 @@ impl WavWriter {
         bits_per_sample: u16,
     ) -> io::Result<Self> {
         let file = File::create(path)?;
-        let mut writer = BufWriter::new(file);
+        Self::create_with_writer(Box::new(file), sample_rate, channels, bits_per_sample)
+    }
 
-        // Write placeholder header (will be updated on close)
+    fn create_with_writer(
+        writer: Box<dyn WriteSeek>,
+        sample_rate: u32,
+        channels: u16,
+        bits_per_sample: u16,
+    ) -> io::Result<Self> {
+        let mut writer = BufWriter::with_capacity(0, writer);
         let header = build_wav_header(sample_rate, channels, bits_per_sample, 0);
         writer.write_all(&header)?;
 
@@ -101,7 +114,7 @@ impl WavWriter {
 
 /// WAV file reader for playback.
 pub struct WavReader {
-    reader: BufReader<File>,
+    reader: BufReader<Box<dyn ReadSeek>>,
     /// Sample rate in Hz.
     pub sample_rate: u32,
     /// Number of channels.
@@ -118,7 +131,11 @@ impl WavReader {
     /// Open a WAV file for reading.
     pub fn open<P: AsRef<Path>>(path: P) -> io::Result<Self> {
         let file = File::open(path)?;
-        let mut reader = BufReader::new(file);
+        Self::open_with_reader(Box::new(file))
+    }
+
+    fn open_with_reader(reader: Box<dyn ReadSeek>) -> io::Result<Self> {
+        let mut reader = BufReader::new(reader);
 
         // Parse WAV header
         let (sample_rate, channels, bits_per_sample, data_size) = parse_wav_header(&mut reader)?;
@@ -369,7 +386,135 @@ pub fn generate_silence(duration_ms: u32, sample_rate: u32) -> Vec<i16> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
+    use std::io::{BufReader, Cursor, Seek, SeekFrom, Write};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    struct FailingWriter {
+        inner: Cursor<Vec<u8>>,
+        fail_on_write_after: Option<usize>,
+        fail_on_flush: bool,
+        fail_on_seek: bool,
+        write_calls: usize,
+    }
+
+    impl FailingWriter {
+        fn new(
+            fail_on_write_after: Option<usize>,
+            fail_on_flush: bool,
+            fail_on_seek: bool,
+        ) -> Self {
+            Self {
+                inner: Cursor::new(Vec::new()),
+                fail_on_write_after,
+                fail_on_flush,
+                fail_on_seek,
+                write_calls: 0,
+            }
+        }
+    }
+
+    impl Write for FailingWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if let Some(limit) = self.fail_on_write_after {
+                if self.write_calls >= limit {
+                    return Err(io::Error::new(io::ErrorKind::Other, "forced write error"));
+                }
+            }
+            self.write_calls += 1;
+            self.inner.write(buf)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            if self.fail_on_flush {
+                return Err(io::Error::new(io::ErrorKind::Other, "forced flush error"));
+            }
+            Ok(())
+        }
+    }
+
+    impl Seek for FailingWriter {
+        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+            if self.fail_on_seek {
+                return Err(io::Error::new(io::ErrorKind::Other, "forced seek error"));
+            }
+            self.inner.seek(pos)
+        }
+    }
+
+    struct ToggleSeekReader {
+        inner: Cursor<Vec<u8>>,
+        fail_seek: Arc<AtomicBool>,
+    }
+
+    impl ToggleSeekReader {
+        fn new(data: Vec<u8>, fail_seek: Arc<AtomicBool>) -> Self {
+            Self {
+                inner: Cursor::new(data),
+                fail_seek,
+            }
+        }
+    }
+
+    impl Read for ToggleSeekReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.inner.read(buf)
+        }
+    }
+
+    impl Seek for ToggleSeekReader {
+        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+            if self.fail_seek.load(Ordering::SeqCst) {
+                return Err(io::Error::new(io::ErrorKind::Other, "forced seek error"));
+            }
+            self.inner.seek(pos)
+        }
+    }
+
+    struct ToggleReadReader {
+        inner: Cursor<Vec<u8>>,
+        fail_read: Arc<AtomicBool>,
+    }
+
+    impl ToggleReadReader {
+        fn new(data: Vec<u8>, fail_read: Arc<AtomicBool>) -> Self {
+            Self {
+                inner: Cursor::new(data),
+                fail_read,
+            }
+        }
+    }
+
+    impl Read for ToggleReadReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.fail_read.load(Ordering::SeqCst) {
+                return Err(io::Error::new(io::ErrorKind::Other, "forced read error"));
+            }
+            self.inner.read(buf)
+        }
+    }
+
+    impl Seek for ToggleReadReader {
+        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+            self.inner.seek(pos)
+        }
+    }
+
+    fn build_seek_reader() -> (WavReader, Arc<AtomicBool>) {
+        let header = build_wav_header(8000, 1, 16, 0);
+        let flag = Arc::new(AtomicBool::new(false));
+        let reader = ToggleSeekReader::new(header, flag.clone());
+        let wav_reader = WavReader::open_with_reader(Box::new(reader)).unwrap();
+        (wav_reader, flag)
+    }
+
+    fn build_read_error_reader() -> (WavReader, Arc<AtomicBool>) {
+        let data = build_wav_header(8000, 1, 16, 4);
+        let flag = Arc::new(AtomicBool::new(false));
+        let reader = ToggleReadReader::new(data, flag.clone());
+        let wav_reader = WavReader::open_with_reader(Box::new(reader)).unwrap();
+        (wav_reader, flag)
+    }
 
     #[test]
     fn test_wav_header_build_parse() {
@@ -388,6 +533,120 @@ mod tests {
         assert_eq!(channels, 1);
         assert_eq!(bits, 16);
         assert_eq!(data_size, 16000);
+    }
+
+    #[test]
+    fn test_wav_writer_create_invalid_path() {
+        let result = WavWriter::create(std::env::temp_dir(), 8000, 1, 16);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_wav_writer_create_pathbuf_success() {
+        let temp_path = std::env::temp_dir().join("wav_create_pathbuf_success.wav");
+        std::fs::remove_file(&temp_path).ok();
+        let writer = WavWriter::create(temp_path.clone(), 8000, 1, 16).unwrap();
+        writer.finish().unwrap();
+        std::fs::remove_file(&temp_path).ok();
+    }
+
+    #[test]
+    fn test_wav_writer_create_header_write_error() {
+        let writer = FailingWriter::new(Some(0), false, false);
+        let result = WavWriter::create_with_writer(Box::new(writer), 8000, 1, 16);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_wav_writer_write_samples_error() {
+        let writer = FailingWriter::new(Some(1), false, false);
+        let mut wav = WavWriter::create_with_writer(Box::new(writer), 8000, 1, 16).unwrap();
+        let result = wav.write_samples(&[1, 2]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_wav_writer_write_bytes_error() {
+        let writer = FailingWriter::new(Some(1), false, false);
+        let mut wav = WavWriter::create_with_writer(Box::new(writer), 8000, 1, 16).unwrap();
+        let result = wav.write_bytes(&[0x01, 0x02]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_wav_writer_finish_flush_error() {
+        let writer = FailingWriter::new(None, true, false);
+        let wav = WavWriter::create_with_writer(Box::new(writer), 8000, 1, 16).unwrap();
+        let result = wav.finish();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_wav_writer_finish_seek_error() {
+        let writer = FailingWriter::new(None, false, true);
+        let wav = WavWriter::create_with_writer(Box::new(writer), 8000, 1, 16).unwrap();
+        let result = wav.finish();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_wav_writer_finish_write_error() {
+        let writer = FailingWriter::new(Some(1), false, false);
+        let wav = WavWriter::create_with_writer(Box::new(writer), 8000, 1, 16).unwrap();
+        let result = wav.finish();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_wav_reader_open_invalid_path() {
+        let temp_path = std::env::temp_dir().join("wav_missing_file.wav");
+        let result = WavReader::open(&temp_path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_wav_reader_open_invalid_header() {
+        let temp_path = std::env::temp_dir().join("wav_invalid_header.wav");
+        {
+            let mut file = std::fs::File::create(&temp_path).unwrap();
+            file.write_all(b"NOTWAV").unwrap();
+        }
+
+        let result = WavReader::open(&temp_path);
+        assert!(result.is_err());
+        std::fs::remove_file(&temp_path).ok();
+    }
+
+    #[test]
+    fn test_wav_reader_seek_secs_error() {
+        let (mut reader, flag) = build_seek_reader();
+        flag.store(true, Ordering::SeqCst);
+        let result = reader.seek_secs(0.1);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_wav_reader_seek_secs_success_toggle_reader() {
+        let (mut reader, _flag) = build_seek_reader();
+        let result = reader.seek_secs(0.1);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_wav_reader_read_samples_error() {
+        let (mut reader, flag) = build_read_error_reader();
+        reader.rewind().unwrap();
+        flag.store(true, Ordering::SeqCst);
+        let result = reader.read_samples(1);
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_wav_reader_rewind_error() {
+        let (mut reader, flag) = build_seek_reader();
+        flag.store(true, Ordering::SeqCst);
+        let result = reader.rewind();
+        assert!(result.is_err());
     }
 
     #[test]
@@ -474,6 +733,26 @@ mod tests {
     }
 
     #[test]
+    fn test_wav_reader_truncated_data() {
+        let temp_path = std::env::temp_dir().join("test_wav_truncated.wav");
+
+        {
+            let mut file = std::fs::File::create(&temp_path).unwrap();
+            let header = build_wav_header(8000, 1, 16, 2);
+            file.write_all(&header).unwrap();
+            file.write_all(&[0xAA]).unwrap();
+        }
+
+        {
+            let mut reader = WavReader::open(&temp_path).unwrap();
+            let samples = reader.read_samples(1).unwrap();
+            assert!(samples.is_empty());
+        }
+
+        std::fs::remove_file(&temp_path).ok();
+    }
+
+    #[test]
     fn test_wav_seek() {
         let temp_path = std::env::temp_dir().join("test_wav_seek.wav");
 
@@ -513,6 +792,68 @@ mod tests {
         data[8..12].copy_from_slice(b"WAVE");
         let mut cursor = Cursor::new(data);
         let result = parse_wav_header(&mut cursor);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_wav_parse_header_with_boxed_reader() {
+        let header = build_wav_header(8000, 1, 16, 320);
+        let reader: Box<dyn ReadSeek> = Box::new(Cursor::new(header));
+        let mut reader = BufReader::new(reader);
+        let (rate, channels, bits, data_size) = parse_wav_header(&mut reader).unwrap();
+        assert_eq!(rate, 8000);
+        assert_eq!(channels, 1);
+        assert_eq!(bits, 16);
+        assert_eq!(data_size, 320);
+    }
+
+    #[test]
+    fn test_wav_reader_open_with_reader_invalid_riff() {
+        let mut data = vec![0u8; 44];
+        data[0..4].copy_from_slice(b"XXXX");
+        data[8..12].copy_from_slice(b"WAVE");
+        let reader = Cursor::new(data);
+        let result = WavReader::open_with_reader(Box::new(reader));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_wav_reader_open_with_reader_invalid_wave() {
+        let mut data = vec![0u8; 44];
+        data[0..4].copy_from_slice(b"RIFF");
+        data[8..12].copy_from_slice(b"XXXX");
+        let reader = Cursor::new(data);
+        let result = WavReader::open_with_reader(Box::new(reader));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_wav_reader_open_with_reader_missing_fmt() {
+        let mut data = vec![0u8; 44];
+        data[0..4].copy_from_slice(b"RIFF");
+        data[8..12].copy_from_slice(b"WAVE");
+        data[12..16].copy_from_slice(b"xxxx");
+        let reader = Cursor::new(data);
+        let result = WavReader::open_with_reader(Box::new(reader));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_wav_reader_open_with_reader_non_pcm_format() {
+        let mut header = build_wav_header(8000, 1, 16, 1000);
+        header[20] = 3;
+        header[21] = 0;
+        let reader = Cursor::new(header);
+        let result = WavReader::open_with_reader(Box::new(reader));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_wav_reader_open_with_reader_missing_data() {
+        let mut header = build_wav_header(8000, 1, 16, 1000);
+        header[36..40].copy_from_slice(b"xxxx");
+        let reader = Cursor::new(header);
+        let result = WavReader::open_with_reader(Box::new(reader));
         assert!(result.is_err());
     }
 

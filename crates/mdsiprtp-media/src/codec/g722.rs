@@ -132,7 +132,7 @@ mod tests {
         // G.722 is lossy but should preserve general signal shape
         // Check that the decoded signal isn't all zeros
         let non_zero = decoded.iter().filter(|&&s| s != 0).count();
-        assert!(non_zero > decoded.len() / 2, "Too many zero samples");
+        assert!(non_zero > decoded.len() / 2);
     }
 
     #[test]

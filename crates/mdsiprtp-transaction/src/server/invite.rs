@@ -515,6 +515,26 @@ mod tests {
     }
 
     #[test]
+    fn test_timer_g_without_last_response() {
+        let invite = create_invite();
+        let mut tx = InviteServerTransaction::new(invite.clone(), false).unwrap();
+        tx.poll_actions();
+
+        let resp = create_response(404, &invite);
+        tx.send_response(resp);
+        tx.poll_actions();
+
+        tx.last_response = None;
+        tx.handle_timeout(Timer::G);
+
+        let actions = tx.poll_actions();
+        assert!(actions
+            .iter()
+            .any(|a| matches!(a, Action::SetTimer(Timer::G, _))));
+        assert!(actions.iter().all(|a| !matches!(a, Action::Send(_))));
+    }
+
+    #[test]
     fn test_invite_retransmit_in_proceeding() {
         let invite = create_invite();
         let mut tx = InviteServerTransaction::new(invite.clone(), false).unwrap();
@@ -532,6 +552,19 @@ mod tests {
 
         let actions = tx.poll_actions();
         assert!(actions.iter().any(|a| matches!(a, Action::Send(_))));
+    }
+
+    #[test]
+    fn test_non_invite_request_in_proceeding_ignored() {
+        let invite = create_invite();
+        let mut tx = InviteServerTransaction::new(invite, false).unwrap();
+        tx.poll_actions();
+
+        let ack = create_ack();
+        tx.handle_request(ack);
+
+        let actions = tx.poll_actions();
+        assert!(actions.is_empty());
     }
 
     #[test]
@@ -568,6 +601,50 @@ mod tests {
 
         let actions = tx.poll_actions();
         assert!(actions.iter().any(|a| matches!(a, Action::Send(_))));
+    }
+
+    #[test]
+    fn test_invite_retransmit_in_completed_without_response() {
+        let invite = create_invite();
+        let mut tx = InviteServerTransaction::new(invite.clone(), false).unwrap();
+        tx.poll_actions();
+
+        let resp = create_response(404, &invite);
+        tx.send_response(resp);
+        tx.poll_actions();
+
+        tx.last_response = None;
+        tx.handle_request(invite);
+
+        let actions = tx.poll_actions();
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn test_non_invite_request_in_completed_ignored() {
+        let invite = create_invite();
+        let mut tx = InviteServerTransaction::new(invite.clone(), false).unwrap();
+        tx.poll_actions();
+
+        let resp = create_response(404, &invite);
+        tx.send_response(resp);
+        tx.poll_actions();
+
+        let bye = SipRequest::builder()
+            .method(Method::Bye)
+            .uri("sip:bob@example.com")
+            .via("192.168.1.1", 5060, "UDP", "z9hG4bKtest")
+            .from("sip:alice@example.com", "fromtag")
+            .to("sip:bob@example.com")
+            .call_id("test@example.com")
+            .cseq(2)
+            .build()
+            .unwrap();
+
+        tx.handle_request(bye);
+
+        let actions = tx.poll_actions();
+        assert!(actions.is_empty());
     }
 
     #[test]
@@ -737,6 +814,20 @@ mod tests {
         tx.send_response(resp);
 
         assert_eq!(tx.state(), State::Completed);
+    }
+
+    #[test]
+    fn test_response_below_100_ignored() {
+        let invite = create_invite();
+        let mut tx = InviteServerTransaction::new(invite.clone(), false).unwrap();
+        tx.poll_actions();
+
+        let resp = create_response(99, &invite);
+        tx.send_response(resp);
+
+        assert_eq!(tx.state(), State::Proceeding);
+        let actions = tx.poll_actions();
+        assert!(actions.is_empty());
     }
 
     #[test]

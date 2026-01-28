@@ -901,9 +901,8 @@ mod tests {
         let mut call = Call::new_inbound(config, "sip:alice@example.com".to_string(), dialog);
 
         // Modify dialog via mutable reference
-        if let Some(d) = call.dialog_mut() {
-            let _ = d.next_cseq();
-        }
+        let d = call.dialog_mut().unwrap();
+        let _ = d.next_cseq();
 
         // Verify modification
         assert!(call.dialog().is_some());
@@ -1063,7 +1062,8 @@ mod tests {
         // Without primed buffer, should get empty samples
         let (decision, samples) = session.get_audio_frame();
         // Empty buffer returns silence
-        assert!(matches!(decision, PlayoutDecision::Silence) || samples.is_empty());
+        assert_eq!(decision, PlayoutDecision::Silence);
+        assert_eq!(samples.len(), 160);
     }
 
     #[test]
@@ -1079,6 +1079,22 @@ mod tests {
         // First packet won't return audio (buffer not primed)
         let result = session.receive_rtp(&packet);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_media_session_receive_rtp_primes_buffer() {
+        let mut session = MediaSession::new(12345, 0, 8000, 5000);
+        session.set_remote("10.0.0.1:6000".parse().unwrap());
+
+        let samples = vec![0i16; 160];
+        let mut result = None;
+
+        for _ in 0..3 {
+            let packet = session.encode_audio(&samples, false);
+            result = session.receive_rtp(&packet);
+        }
+
+        assert!(result.is_some());
     }
 
     #[test]

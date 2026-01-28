@@ -299,6 +299,7 @@ impl SipUriBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write;
 
     #[test]
     fn test_parse_simple_uri() {
@@ -352,6 +353,60 @@ mod tests {
         assert!(s.contains("example.com"));
         assert!(s.contains(":5060"));
         assert!(s.contains("transport=udp"));
+    }
+
+    #[test]
+    fn test_uri_display_error_paths() {
+        struct CountingWriter {
+            writes: usize,
+        }
+
+        impl std::fmt::Write for CountingWriter {
+            fn write_str(&mut self, _s: &str) -> std::fmt::Result {
+                self.writes += 1;
+                Ok(())
+            }
+        }
+
+        struct FailingWriter {
+            fail_at: usize,
+            writes: usize,
+        }
+
+        impl FailingWriter {
+            fn new(fail_at: usize) -> Self {
+                Self { fail_at, writes: 0 }
+            }
+        }
+
+        impl std::fmt::Write for FailingWriter {
+            fn write_str(&mut self, _s: &str) -> std::fmt::Result {
+                self.writes += 1;
+                if self.writes == self.fail_at {
+                    return Err(std::fmt::Error);
+                }
+                Ok(())
+            }
+        }
+
+        let uri = SipUri::builder()
+            .scheme("sip")
+            .user("alice")
+            .host("example.com")
+            .port(5060)
+            .transport("udp")
+            .loose_route()
+            .build()
+            .unwrap();
+
+        let mut counter = CountingWriter { writes: 0 };
+        let _ = write!(&mut counter, "{}", uri);
+        let total_writes = counter.writes;
+
+        for fail_at in 1..=total_writes {
+            let mut writer = FailingWriter::new(fail_at);
+            let _ = write!(&mut writer, "{}", uri);
+        }
     }
 
     #[test]

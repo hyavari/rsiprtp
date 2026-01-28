@@ -117,18 +117,20 @@ impl StackInstance {
         let rtp_addr: SocketAddr = format!("127.0.0.1:{}", config.rtp_port).parse().unwrap();
         let rtp_socket = UdpSocket::bind(rtp_addr).await?;
         let local_rtp_addr = rtp_socket.local_addr()?;
+        let rtp_port = local_rtp_addr.port();
+        let rtp_port_end = rtp_port.saturating_add(100);
 
         // Create call manager config
         let manager_config = ManagerConfig {
             local_sip_addr: local_sip_addr.to_string(),
             local_rtp_addr: local_rtp_addr.ip().to_string(),
-            rtp_port_range: (local_rtp_addr.port(), local_rtp_addr.port() + 100),
+            rtp_port_range: (rtp_port, rtp_port_end),
             call_config: CallConfig {
                 local_uri: format!("sip:{}@{}", config.user, local_sip_addr),
                 local_name: Some(config.user.clone()),
                 codecs: vec![Codec::pcmu(), Codec::pcma()],
-                rtp_port_start: local_rtp_addr.port(),
-                rtp_port_end: local_rtp_addr.port() + 100,
+                rtp_port_start: rtp_port,
+                rtp_port_end,
             },
         };
 

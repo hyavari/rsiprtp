@@ -12,6 +12,9 @@ use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
+#[cfg(test)]
+use std::sync::atomic::{AtomicU64, Ordering};
+
 /// ICE agent errors.
 #[derive(Error, Debug)]
 pub enum IceError {
@@ -239,17 +242,22 @@ impl IceAgent {
 
     /// Gather host candidates from local interfaces.
     async fn gather_host_candidates(&self) -> Result<Vec<Candidate>, IceError> {
-        let mut candidates = Vec::new();
-
-        // Get local addresses
         let addrs = get_local_addresses();
+        self.gather_host_candidates_with(addrs).await
+    }
+
+    async fn gather_host_candidates_with(
+        &self,
+        addrs: Vec<IpAddr>,
+    ) -> Result<Vec<Candidate>, IceError> {
+        let mut candidates = Vec::new();
 
         for addr in addrs {
             // Bind a socket for this address
             let bind_addr = SocketAddr::new(addr, 0);
             match UdpSocket::bind(bind_addr).await {
                 Ok(socket) => {
-                    let local_addr = socket.local_addr()?;
+                    let local_addr = socket_local_addr(&socket)?;
                     debug!("Bound socket to {}", local_addr);
 
                     // Create host candidate
@@ -330,9 +338,15 @@ impl IceAgent {
 
         // Wait for response
         let mut buf = vec![0u8; 1024];
-        let (len, _) = timeout(Duration::from_secs(3), socket.recv_from(&mut buf))
-            .await
-            .map_err(|_| crate::stun::StunError::Timeout)??;
+        let (len, _) = match timeout(
+            Duration::from_millis(self.config.check_timeout_ms),
+            socket_recv_from(socket, &mut buf),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => return Err(crate::stun::StunError::Timeout),
+        }?;
 
         // Parse response (simplified)
         let data = &buf[..len];
@@ -494,9 +508,8 @@ impl IceAgent {
             // Mark as in-progress
             {
                 let mut pairs = self.candidate_pairs.write().await;
-                if let Some(p) = pairs.get_mut(idx) {
-                    p.state = PairState::InProgress;
-                }
+                let pair_state = pairs.get_mut(idx).expect("candidate pair missing");
+                pair_state.state = PairState::InProgress;
             }
 
             debug!(
@@ -525,38 +538,40 @@ impl IceAgent {
             };
 
             // Update pair state
+            let mut succeeded = false;
             {
                 let mut pairs = self.candidate_pairs.write().await;
-                if let Some(p) = pairs.get_mut(idx) {
-                    if check_result {
-                        p.state = PairState::Succeeded;
-                        info!(
-                            "Connectivity check succeeded: {} <-> {}",
-                            pair.local.address, pair.remote.address
-                        );
+                let pair_state = pairs.get_mut(idx).expect("candidate pair missing");
+                if check_result {
+                    pair_state.state = PairState::Succeeded;
+                    info!(
+                        "Connectivity check succeeded: {} <-> {}",
+                        pair.local.address, pair.remote.address
+                    );
 
-                        // If controlling, nominate this pair
-                        if self.role == IceRole::Controlling {
-                            p.nominated = true;
-                        }
-
-                        // Select this pair
-                        let mut selected = self.selected_pair.write().await;
-                        *selected = Some(p.clone());
-                        *self.state.write().await = IceState::Connected;
-
-                        // Unfreeze other pairs with same foundation (for triggered checks)
-                        self.unfreeze_related_pairs(idx, &pair).await;
-
-                        return Ok(());
-                    } else {
-                        p.state = PairState::Failed;
-                        debug!(
-                            "Connectivity check failed: {} <-> {}",
-                            pair.local.address, pair.remote.address
-                        );
+                    // If controlling, nominate this pair
+                    if self.role == IceRole::Controlling {
+                        pair_state.nominated = true;
                     }
+
+                    // Select this pair
+                    let mut selected = self.selected_pair.write().await;
+                    *selected = Some(pair_state.clone());
+                    *self.state.write().await = IceState::Connected;
+                    succeeded = true;
+                } else {
+                    pair_state.state = PairState::Failed;
+                    debug!(
+                        "Connectivity check failed: {} <-> {}",
+                        pair.local.address, pair.remote.address
+                    );
                 }
+            }
+
+            if succeeded {
+                // Unfreeze other pairs with same foundation (for triggered checks)
+                self.unfreeze_related_pairs(idx, &pair).await;
+                return Ok(());
             }
         }
 
@@ -786,13 +801,120 @@ impl IceAgent {
 
 /// Get local IP addresses suitable for ICE.
 fn get_local_addresses() -> Vec<IpAddr> {
+    get_local_addresses_with(bind_default, connect_default, local_addr_default)
+}
+
+#[cfg(test)]
+static FORCE_HOST_LOCAL_ADDR_ERROR: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static FORCE_STUN_RECV_ERROR: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(test)]
+fn force_host_local_addr_error_once() {
+    FORCE_HOST_LOCAL_ADDR_ERROR.store(current_thread_id(), Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn take_forced_host_local_addr_error() -> Option<std::io::Error> {
+    let current = current_thread_id();
+    if FORCE_HOST_LOCAL_ADDR_ERROR.load(Ordering::SeqCst) == current {
+        let _ = FORCE_HOST_LOCAL_ADDR_ERROR.compare_exchange(
+            current,
+            0,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+        Some(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "forced local_addr error",
+        ))
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+fn force_stun_recv_error_once() {
+    FORCE_STUN_RECV_ERROR.store(current_thread_id(), Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn take_forced_stun_recv_error() -> Option<std::io::Error> {
+    let current = current_thread_id();
+    if FORCE_STUN_RECV_ERROR.load(Ordering::SeqCst) == current {
+        let _ =
+            FORCE_STUN_RECV_ERROR.compare_exchange(current, 0, Ordering::SeqCst, Ordering::SeqCst);
+        Some(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "forced recv_from error",
+        ))
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+fn current_thread_id() -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::thread::current().id().hash(&mut hasher);
+    let id = hasher.finish();
+    normalize_thread_id(id)
+}
+
+#[cfg(test)]
+fn normalize_thread_id(id: u64) -> u64 {
+    if id == 0 {
+        1
+    } else {
+        id
+    }
+}
+
+fn socket_local_addr(socket: &UdpSocket) -> Result<SocketAddr, IceError> {
+    #[cfg(test)]
+    if let Some(err) = take_forced_host_local_addr_error() {
+        return Err(IceError::Io(err));
+    }
+    socket.local_addr().map_err(IceError::Io)
+}
+
+async fn socket_recv_from(
+    socket: &UdpSocket,
+    buf: &mut [u8],
+) -> Result<(usize, SocketAddr), std::io::Error> {
+    #[cfg(test)]
+    if let Some(err) = take_forced_stun_recv_error() {
+        return Err(err);
+    }
+    socket.recv_from(buf).await
+}
+
+fn bind_default() -> std::io::Result<std::net::UdpSocket> {
+    std::net::UdpSocket::bind("0.0.0.0:0")
+}
+
+fn connect_default(socket: &std::net::UdpSocket) -> std::io::Result<()> {
+    socket.connect("8.8.8.8:80")
+}
+
+fn local_addr_default(socket: &std::net::UdpSocket) -> std::io::Result<std::net::SocketAddr> {
+    socket.local_addr()
+}
+
+fn get_local_addresses_with(
+    bind: fn() -> std::io::Result<std::net::UdpSocket>,
+    connect: fn(&std::net::UdpSocket) -> std::io::Result<()>,
+    local_addr: fn(&std::net::UdpSocket) -> std::io::Result<std::net::SocketAddr>,
+) -> Vec<IpAddr> {
     let mut addrs = Vec::new();
 
     // Try to get addresses by connecting to a public address
     // This finds the default route interface
-    if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
-        if socket.connect("8.8.8.8:80").is_ok() {
-            if let Ok(local) = socket.local_addr() {
+    if let Ok(socket) = bind() {
+        if connect(&socket).is_ok() {
+            if let Ok(local) = local_addr(&socket) {
                 addrs.push(local.ip());
             }
         }
@@ -808,6 +930,24 @@ fn get_local_addresses() -> Vec<IpAddr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Transport;
+    use std::sync::Once;
+
+    fn init_tracing() {
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            let _ = tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::TRACE)
+                .with_test_writer()
+                .try_init();
+        });
+    }
+
+    #[test]
+    fn test_normalize_thread_id_branches() {
+        assert_eq!(normalize_thread_id(0), 1);
+        assert_eq!(normalize_thread_id(42), 42);
+    }
 
     // IceError tests
     #[test]
@@ -1017,12 +1157,69 @@ mod tests {
     }
 
     // get_local_addresses tests
+    fn bind_ok() -> std::io::Result<std::net::UdpSocket> {
+        std::net::UdpSocket::bind("127.0.0.1:0")
+    }
+
+    fn bind_err() -> std::io::Result<std::net::UdpSocket> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "bind failed",
+        ))
+    }
+
+    fn connect_ok(socket: &std::net::UdpSocket) -> std::io::Result<()> {
+        socket.connect("127.0.0.1:9")
+    }
+
+    fn connect_err(_socket: &std::net::UdpSocket) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "connect failed",
+        ))
+    }
+
+    fn local_addr_ok(socket: &std::net::UdpSocket) -> std::io::Result<std::net::SocketAddr> {
+        socket.local_addr()
+    }
+
+    fn local_addr_err(_socket: &std::net::UdpSocket) -> std::io::Result<std::net::SocketAddr> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "addr failed",
+        ))
+    }
+
     #[test]
     fn test_get_local_addresses() {
         let addrs = get_local_addresses();
         // Should at least contain localhost
         assert!(!addrs.is_empty());
         assert!(addrs.contains(&IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)));
+    }
+
+    #[test]
+    fn test_get_local_addresses_with_bind_error() {
+        let addrs = get_local_addresses_with(bind_err, connect_ok, local_addr_ok);
+        assert_eq!(addrs, vec![IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)]);
+    }
+
+    #[test]
+    fn test_get_local_addresses_with_connect_error() {
+        let addrs = get_local_addresses_with(bind_ok, connect_err, local_addr_ok);
+        assert_eq!(addrs, vec![IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)]);
+    }
+
+    #[test]
+    fn test_get_local_addresses_with_local_addr_error() {
+        let addrs = get_local_addresses_with(bind_ok, connect_ok, local_addr_err);
+        assert_eq!(addrs, vec![IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)]);
+    }
+
+    #[test]
+    fn test_get_local_addresses_with_success() {
+        let addrs = get_local_addresses_with(bind_ok, connect_ok, local_addr_ok);
+        assert_eq!(addrs, vec![IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)]);
     }
 
     // IceAgent tests
@@ -1074,6 +1271,25 @@ mod tests {
         assert!(candidates
             .iter()
             .any(|c| c.candidate_type == CandidateType::Host));
+    }
+
+    #[tokio::test]
+    async fn test_gather_host_candidates_with_bind_error() {
+        init_tracing();
+        let config = IceConfig {
+            stun_servers: vec![],
+            ..Default::default()
+        };
+        let agent = IceAgent::new(config, IceRole::Controlling);
+
+        let addrs = vec![
+            IpAddr::V4(std::net::Ipv4Addr::new(203, 0, 113, 1)),
+            IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        ];
+        let candidates = agent.gather_host_candidates_with(addrs).await.unwrap();
+        assert!(candidates
+            .iter()
+            .any(|c| c.address.ip() == IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)));
     }
 
     #[tokio::test]
@@ -1147,6 +1363,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_form_candidate_pairs_skips_mismatched_transport() {
+        let config = IceConfig {
+            stun_servers: vec![],
+            ..Default::default()
+        };
+        let agent = IceAgent::new(config, IceRole::Controlling);
+
+        let mut local = Candidate::host(
+            SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 1)), 5001),
+            1,
+        );
+        local.transport = Transport::Tcp;
+        agent.local_candidates.write().await.push(local);
+
+        let remote = Candidate::host(
+            SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 100)), 5000),
+            1,
+        );
+        agent.remote_candidates.write().await.push(remote);
+
+        agent.form_candidate_pairs().await;
+
+        let pairs = agent.candidate_pairs.read().await;
+        assert!(pairs.is_empty());
+    }
+
+    #[tokio::test]
     async fn test_set_remote_credentials() {
         let config = IceConfig {
             stun_servers: vec![],
@@ -1180,7 +1423,108 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_start_checks_missing_socket_falls_back() {
+        init_tracing();
+        let config = IceConfig {
+            stun_servers: vec![],
+            ..Default::default()
+        };
+        let agent = IceAgent::new(config, IceRole::Controlling);
+
+        let local = Candidate::host(
+            SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 1)), 5001),
+            1,
+        );
+        agent.local_candidates.write().await.push(local);
+
+        let remote = Candidate::host(
+            SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 100)), 5000),
+            1,
+        );
+        agent.add_remote_candidates(vec![remote]).await;
+        agent.set_remote_credentials("remufrag", "rempwd").await;
+
+        let result = agent.start_checks().await;
+        assert!(result.is_ok());
+        assert_eq!(agent.state().await, IceState::Connected);
+    }
+
+    #[tokio::test]
+    async fn test_start_checks_success() {
+        init_tracing();
+        let config = IceConfig {
+            stun_servers: vec![],
+            ..Default::default()
+        };
+        let agent = IceAgent::new(config, IceRole::Controlling);
+
+        let local_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let local_addr = local_socket.local_addr().unwrap();
+        let local = Candidate::host(local_addr, 1);
+        agent.local_candidates.write().await.push(local.clone());
+        agent
+            .sockets
+            .write()
+            .await
+            .insert(local.address, Arc::new(local_socket));
+
+        let mock = MockStunServer::new().await;
+        let remote = Candidate::host(mock.addr, 1);
+        agent.add_remote_candidates(vec![remote]).await;
+        agent
+            .set_remote_credentials("remoteufrag", "remotepwd")
+            .await;
+
+        let mock_socket = mock.socket.clone();
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 1024];
+            let (_len, peer) = mock_socket.recv_from(&mut buf).await.unwrap();
+            let mut txn_id = [0u8; 12];
+            txn_id.copy_from_slice(&buf[8..20]);
+            let response = MockStunServer::build_connectivity_check_response(&txn_id);
+            let _ = mock_socket.send_to(&response, peer).await;
+        });
+
+        let result = agent.start_checks().await;
+        assert!(result.is_ok());
+        let selected = agent.selected_pair().await.unwrap();
+        assert_eq!(selected.state, PairState::Succeeded);
+        assert!(selected.nominated);
+    }
+
+    #[tokio::test]
+    async fn test_perform_connectivity_check_send_error() {
+        init_tracing();
+        let config = IceConfig {
+            stun_servers: vec![],
+            ..Default::default()
+        };
+        let agent = IceAgent::new(config, IceRole::Controlling);
+
+        let local_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let local_addr = local_socket.local_addr().unwrap();
+        let local_cand = Candidate::host(local_addr, 1);
+        let remote_cand = Candidate::host(
+            SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 0),
+            1,
+        );
+        let pair = CandidatePair {
+            local: local_cand,
+            remote: remote_cand,
+            priority: 100,
+            state: PairState::Waiting,
+            nominated: false,
+        };
+
+        let result = agent
+            .perform_connectivity_check(&local_socket, &pair, "remoteufrag", "remotepwd")
+            .await;
+        assert!(!result);
+    }
+
+    #[tokio::test]
     async fn test_fallback_selection() {
+        init_tracing();
         let config = IceConfig {
             stun_servers: vec![],
             ..Default::default()
@@ -1219,6 +1563,61 @@ mod tests {
         let pair = selected.unwrap();
         assert_eq!(pair.local.candidate_type, CandidateType::Host);
         assert_eq!(pair.remote.candidate_type, CandidateType::Host);
+    }
+
+    #[tokio::test]
+    async fn test_fallback_selection_non_host_pair() {
+        init_tracing();
+        let config = IceConfig {
+            stun_servers: vec![],
+            ..Default::default()
+        };
+        let agent = IceAgent::new(config, IceRole::Controlling);
+
+        let base = SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 1)), 5001);
+        let mapped = SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 2)), 5002);
+        let remote_mapped =
+            SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 3)), 5003);
+
+        let local_host = Candidate::host(base, 1);
+        let remote_srflx = Candidate::server_reflexive(remote_mapped, base, 1);
+        let local_srflx = Candidate::server_reflexive(mapped, base, 1);
+        let remote_host = Candidate::host(
+            SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 100)), 5000),
+            1,
+        );
+
+        let pair1 = CandidatePair {
+            local: local_host.clone(),
+            remote: remote_srflx,
+            priority: 1000,
+            state: PairState::Waiting,
+            nominated: false,
+        };
+        let pair2 = CandidatePair {
+            local: local_srflx,
+            remote: remote_host,
+            priority: 900,
+            state: PairState::Waiting,
+            nominated: false,
+        };
+        {
+            let mut pairs = agent.candidate_pairs.write().await;
+            pairs.push(pair1);
+            pairs.push(pair2);
+        }
+
+        let result = agent.fallback_selection().await;
+        assert!(result.is_ok());
+
+        let selected = agent.selected_pair().await;
+        assert!(selected.is_some());
+        let selected = selected.unwrap();
+        assert_eq!(selected.local.candidate_type, CandidateType::Host);
+        assert_eq!(
+            selected.remote.candidate_type,
+            CandidateType::ServerReflexive
+        );
     }
 
     #[tokio::test]
@@ -1385,9 +1784,18 @@ mod tests {
         }
     }
 
+    #[test]
+    #[should_panic(expected = "IPv6 not implemented in mock")]
+    fn test_mock_stun_server_ipv6_not_implemented() {
+        let txn_id = [0u8; 12];
+        let addr = SocketAddr::new(IpAddr::V6(std::net::Ipv6Addr::LOCALHOST), 9999);
+        let _ = MockStunServer::build_binding_response(&txn_id, addr);
+    }
+
     // Test: perform_connectivity_check with successful response
     #[tokio::test]
     async fn test_perform_connectivity_check_success() {
+        init_tracing();
         let config = IceConfig {
             stun_servers: vec![],
             ..Default::default()
@@ -1417,17 +1825,13 @@ mod tests {
         let mock_socket = mock.socket.clone();
         tokio::spawn(async move {
             let mut buf = vec![0u8; 1024];
-            if let Ok((len, peer)) = mock_socket.recv_from(&mut buf).await {
-                // Extract transaction ID from request
-                if len >= 20 {
-                    let mut txn_id = [0u8; 12];
-                    txn_id.copy_from_slice(&buf[8..20]);
+            let (_len, peer) = mock_socket.recv_from(&mut buf).await.unwrap();
+            let mut txn_id = [0u8; 12];
+            txn_id.copy_from_slice(&buf[8..20]);
 
-                    // Send response
-                    let response = MockStunServer::build_connectivity_check_response(&txn_id);
-                    let _ = mock_socket.send_to(&response, peer).await;
-                }
-            }
+            // Send response
+            let response = MockStunServer::build_connectivity_check_response(&txn_id);
+            let _ = mock_socket.send_to(&response, peer).await;
         });
 
         // Perform connectivity check
@@ -1435,12 +1839,13 @@ mod tests {
             .perform_connectivity_check(&local_socket, &pair, "remoteufrag", "remotepwd")
             .await;
 
-        assert!(result, "Connectivity check should succeed");
+        assert!(result);
     }
 
     // Test: perform_connectivity_check with timeout
     #[tokio::test]
     async fn test_perform_connectivity_check_timeout() {
+        init_tracing();
         let config = IceConfig {
             stun_servers: vec![],
             check_timeout_ms: 100, // Very short timeout
@@ -1471,7 +1876,7 @@ mod tests {
             .perform_connectivity_check(&local_socket, &pair, "remoteufrag", "remotepwd")
             .await;
 
-        assert!(!result, "Connectivity check should timeout and fail");
+        assert!(!result);
     }
 
     // Test: perform_connectivity_check with invalid response
@@ -1504,20 +1909,116 @@ mod tests {
         let mock_socket = mock.socket.clone();
         tokio::spawn(async move {
             let mut buf = vec![0u8; 1024];
-            if let Ok((_, peer)) = mock_socket.recv_from(&mut buf).await {
-                // Send invalid response (too short)
-                let _ = mock_socket.send_to(&[0, 1, 2, 3], peer).await;
-            }
+            let (_len, peer) = mock_socket.recv_from(&mut buf).await.unwrap();
+            // Send invalid response (too short)
+            let _ = mock_socket.send_to(&[0, 1, 2, 3], peer).await;
         });
 
         let result = agent
             .perform_connectivity_check(&local_socket, &pair, "remoteufrag", "remotepwd")
             .await;
 
-        assert!(
-            !result,
-            "Connectivity check should fail with invalid response"
-        );
+        assert!(!result);
+    }
+
+    // Test: perform_connectivity_check with wrong message type
+    #[tokio::test]
+    async fn test_perform_connectivity_check_bad_message_type() {
+        use bytes::{BufMut, BytesMut};
+
+        let config = IceConfig {
+            stun_servers: vec![],
+            check_timeout_ms: 100,
+            ..Default::default()
+        };
+        let agent = IceAgent::new(config, IceRole::Controlling);
+
+        let local_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let local_addr = local_socket.local_addr().unwrap();
+
+        let mock = MockStunServer::new().await;
+        let mock_addr = mock.addr;
+
+        let local_cand = Candidate::host(local_addr, 1);
+        let remote_cand = Candidate::host(mock_addr, 1);
+        let pair = CandidatePair {
+            local: local_cand,
+            remote: remote_cand,
+            priority: 1000,
+            state: PairState::Waiting,
+            nominated: false,
+        };
+
+        let mock_socket = mock.socket.clone();
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 1024];
+            let (_len, peer) = mock_socket.recv_from(&mut buf).await.unwrap();
+            let mut txn_id = [0u8; 12];
+            txn_id.copy_from_slice(&buf[8..20]);
+
+            let mut msg = BytesMut::new();
+            msg.put_u16(0x0001); // Not a response
+            msg.put_u16(0);
+            msg.put_u32(0x2112A442);
+            msg.put_slice(&txn_id);
+            let _ = mock_socket.send_to(&msg, peer).await;
+        });
+
+        let result = agent
+            .perform_connectivity_check(&local_socket, &pair, "remoteufrag", "remotepwd")
+            .await;
+
+        assert!(!result);
+    }
+
+    // Test: perform_connectivity_check with bad magic cookie
+    #[tokio::test]
+    async fn test_perform_connectivity_check_bad_cookie() {
+        use bytes::{BufMut, BytesMut};
+
+        let config = IceConfig {
+            stun_servers: vec![],
+            check_timeout_ms: 100,
+            ..Default::default()
+        };
+        let agent = IceAgent::new(config, IceRole::Controlling);
+
+        let local_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let local_addr = local_socket.local_addr().unwrap();
+
+        let mock = MockStunServer::new().await;
+        let mock_addr = mock.addr;
+
+        let local_cand = Candidate::host(local_addr, 1);
+        let remote_cand = Candidate::host(mock_addr, 1);
+        let pair = CandidatePair {
+            local: local_cand,
+            remote: remote_cand,
+            priority: 1000,
+            state: PairState::Waiting,
+            nominated: false,
+        };
+
+        let mock_socket = mock.socket.clone();
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 1024];
+            let (_len, peer) = mock_socket.recv_from(&mut buf).await.unwrap();
+            let mut txn_id = [0u8; 12];
+            txn_id.copy_from_slice(&buf[8..20]);
+
+            let mut msg = BytesMut::new();
+            msg.put_u16(0x0101);
+            msg.put_u16(0);
+            msg.put_u32(0xDEADBEEF);
+            msg.put_slice(&txn_id);
+            let _ = mock_socket.send_to(&msg, peer).await;
+        });
+
+        let result = agent
+            .perform_connectivity_check(&local_socket, &pair, "remoteufrag", "remotepwd")
+            .await;
+
+        assert!(!result);
     }
 
     // Test: perform_connectivity_check with wrong transaction ID
@@ -1550,22 +2051,18 @@ mod tests {
         let mock_socket = mock.socket.clone();
         tokio::spawn(async move {
             let mut buf = vec![0u8; 1024];
-            if let Ok((_, peer)) = mock_socket.recv_from(&mut buf).await {
-                // Send response with different transaction ID
-                let wrong_txn_id = [9u8; 12];
-                let response = MockStunServer::build_connectivity_check_response(&wrong_txn_id);
-                let _ = mock_socket.send_to(&response, peer).await;
-            }
+            let (_len, peer) = mock_socket.recv_from(&mut buf).await.unwrap();
+            // Send response with different transaction ID
+            let wrong_txn_id = [9u8; 12];
+            let response = MockStunServer::build_connectivity_check_response(&wrong_txn_id);
+            let _ = mock_socket.send_to(&response, peer).await;
         });
 
         let result = agent
             .perform_connectivity_check(&local_socket, &pair, "remoteufrag", "remotepwd")
             .await;
 
-        assert!(
-            !result,
-            "Connectivity check should fail with wrong transaction ID"
-        );
+        assert!(!result);
     }
 
     // Test: Controlling agent nominates successful pair
@@ -1593,26 +2090,18 @@ mod tests {
         // Manually mark pair as succeeded (simulating successful check)
         {
             let mut pairs = agent.candidate_pairs.write().await;
-            if let Some(pair) = pairs.get_mut(0) {
-                pair.state = PairState::Succeeded;
+            let pair = pairs.get_mut(0).unwrap();
+            pair.state = PairState::Succeeded;
+            pair.nominated = true;
 
-                // Simulate what start_checks does for controlling agent
-                if agent.role == IceRole::Controlling {
-                    pair.nominated = true;
-                }
-
-                // Select the pair
-                *agent.selected_pair.write().await = Some(pair.clone());
-                *agent.state.write().await = IceState::Connected;
-            }
+            // Select the pair
+            *agent.selected_pair.write().await = Some(pair.clone());
+            *agent.state.write().await = IceState::Connected;
         }
 
         // Verify controlling agent nominated the pair
         let selected = agent.selected_pair().await.unwrap();
-        assert!(
-            selected.nominated,
-            "Controlling agent should nominate successful pair"
-        );
+        assert!(selected.nominated);
         assert_eq!(selected.state, PairState::Succeeded);
         assert_eq!(agent.state().await, IceState::Connected);
     }
@@ -1641,22 +2130,17 @@ mod tests {
         // Manually mark pair as succeeded
         {
             let mut pairs = agent.candidate_pairs.write().await;
-            if let Some(pair) = pairs.get_mut(0) {
-                pair.state = PairState::Succeeded;
+            let pair = pairs.get_mut(0).unwrap();
+            pair.state = PairState::Succeeded;
+            pair.nominated = false;
 
-                // Controlled agent should NOT nominate
-                if agent.role == IceRole::Controlling {
-                    pair.nominated = true;
-                }
-
-                *agent.selected_pair.write().await = Some(pair.clone());
-                *agent.state.write().await = IceState::Connected;
-            }
+            *agent.selected_pair.write().await = Some(pair.clone());
+            *agent.state.write().await = IceState::Connected;
         }
 
         // Verify controlled agent did not nominate
         let selected = agent.selected_pair().await.unwrap();
-        assert!(!selected.nominated, "Controlled agent should not nominate");
+        assert!(!selected.nominated);
     }
 
     // Test: pair prioritization logic
@@ -1695,10 +2179,7 @@ mod tests {
 
         // Host candidates have higher priority than srflx
         // So first pair should have host local candidate
-        assert!(
-            pairs[0].priority >= pairs[1].priority,
-            "Pairs should be sorted by priority"
-        );
+        assert!(pairs[0].priority >= pairs[1].priority);
     }
 
     // Test: unfreeze_related_pairs functionality
@@ -1765,7 +2246,77 @@ mod tests {
             .iter()
             .filter(|p| p.state == PairState::Waiting)
             .count();
-        assert!(unfrozen_count > 0, "Related pairs should be unfrozen");
+        assert!(unfrozen_count > 0);
+    }
+
+    #[tokio::test]
+    async fn test_unfreeze_related_pairs_skips_mismatched() {
+        let config = IceConfig {
+            stun_servers: vec![],
+            ..Default::default()
+        };
+        let agent = IceAgent::new(config, IceRole::Controlling);
+
+        let local_base = Candidate::host(
+            SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 1)), 5001),
+            1,
+        );
+        let local_other = Candidate::host(
+            SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 2)), 5002),
+            1,
+        );
+        let remote = Candidate::host(
+            SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 100)), 5000),
+            1,
+        );
+
+        let succeeded = CandidatePair {
+            local: local_base.clone(),
+            remote: remote.clone(),
+            priority: 1000,
+            state: PairState::Succeeded,
+            nominated: false,
+        };
+
+        let frozen_match = CandidatePair {
+            local: local_base.clone(),
+            remote: remote.clone(),
+            priority: 900,
+            state: PairState::Frozen,
+            nominated: false,
+        };
+
+        let waiting_match = CandidatePair {
+            local: local_base.clone(),
+            remote: remote.clone(),
+            priority: 800,
+            state: PairState::Waiting,
+            nominated: false,
+        };
+
+        let frozen_other = CandidatePair {
+            local: local_other,
+            remote,
+            priority: 700,
+            state: PairState::Frozen,
+            nominated: false,
+        };
+
+        {
+            let mut pairs = agent.candidate_pairs.write().await;
+            pairs.clear();
+            pairs.push(succeeded.clone());
+            pairs.push(frozen_match);
+            pairs.push(waiting_match);
+            pairs.push(frozen_other);
+        }
+
+        agent.unfreeze_related_pairs(0, &succeeded).await;
+
+        let pairs = agent.candidate_pairs.read().await;
+        assert_eq!(pairs[1].state, PairState::Waiting);
+        assert_eq!(pairs[2].state, PairState::Waiting);
+        assert_eq!(pairs[3].state, PairState::Frozen);
     }
 
     // Test: stun_binding_request with successful response
@@ -1795,25 +2346,22 @@ mod tests {
         let expected_mapped = mapped_addr;
         tokio::spawn(async move {
             let mut buf = vec![0u8; 1024];
-            if let Ok((len, peer)) = mock_socket.recv_from(&mut buf).await {
-                if len >= 20 {
-                    let mut txn_id = [0u8; 12];
-                    txn_id.copy_from_slice(&buf[8..20]);
-                    let response = MockStunServer::build_binding_response(&txn_id, expected_mapped);
-                    let _ = mock_socket.send_to(&response, peer).await;
-                }
-            }
+            let (_len, peer) = mock_socket.recv_from(&mut buf).await.unwrap();
+            let mut txn_id = [0u8; 12];
+            txn_id.copy_from_slice(&buf[8..20]);
+            let response = MockStunServer::build_binding_response(&txn_id, expected_mapped);
+            let _ = mock_socket.send_to(&response, peer).await;
         });
 
         // Perform STUN binding request
         let result = agent.stun_binding_request(&local_socket, &server).await;
-        assert!(result.is_ok(), "STUN binding request should succeed");
+        assert!(result.is_ok());
         assert_eq!(result.unwrap(), mapped_addr);
     }
 
-    // Test: stun_binding_request with timeout
+    // Test: stun_binding_request with too-short response
     #[tokio::test]
-    async fn test_stun_binding_request_timeout() {
+    async fn test_stun_binding_request_too_short() {
         let config = IceConfig {
             stun_servers: vec![],
             ..Default::default()
@@ -1821,18 +2369,244 @@ mod tests {
         let agent = IceAgent::new(config, IceRole::Controlling);
 
         let local_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-
-        // Use unreachable address
+        let mock = MockStunServer::new().await;
         let server = StunServer {
-            name: "unreachable",
-            addr: SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, 1)), 3478),
+            name: "mock",
+            addr: mock.addr,
         };
 
+        let mock_socket = mock.socket.clone();
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 1024];
+            let (_len, peer) = mock_socket.recv_from(&mut buf).await.unwrap();
+            let _ = mock_socket.send_to(&[0u8; 8], peer).await;
+        });
+
         let result = agent.stun_binding_request(&local_socket, &server).await;
-        assert!(
-            result.is_err(),
-            "STUN request to unreachable server should timeout"
-        );
+        assert!(result.is_err());
+    }
+
+    // Test: stun_binding_request with non-response message type
+    #[tokio::test]
+    async fn test_stun_binding_request_not_response() {
+        use bytes::{BufMut, BytesMut};
+
+        let config = IceConfig {
+            stun_servers: vec![],
+            ..Default::default()
+        };
+        let agent = IceAgent::new(config, IceRole::Controlling);
+
+        let local_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let mock = MockStunServer::new().await;
+        let server = StunServer {
+            name: "mock",
+            addr: mock.addr,
+        };
+
+        let mock_socket = mock.socket.clone();
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 1024];
+            let (_len, peer) = mock_socket.recv_from(&mut buf).await.unwrap();
+            let mut txn_id = [0u8; 12];
+            txn_id.copy_from_slice(&buf[8..20]);
+
+            let mut msg = BytesMut::new();
+            msg.put_u16(0x0001); // Not a response
+            msg.put_u16(0);
+            msg.put_u32(0x2112A442);
+            msg.put_slice(&txn_id);
+            let _ = mock_socket.send_to(&msg, peer).await;
+        });
+
+        let result = agent.stun_binding_request(&local_socket, &server).await;
+        assert!(result.is_err());
+    }
+
+    // Test: stun_binding_request with non-XOR attribute payload
+    #[tokio::test]
+    async fn test_stun_binding_request_non_xor_attribute() {
+        use bytes::{BufMut, BytesMut};
+
+        let config = IceConfig {
+            stun_servers: vec![],
+            ..Default::default()
+        };
+        let agent = IceAgent::new(config, IceRole::Controlling);
+
+        let local_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let mock = MockStunServer::new().await;
+        let server = StunServer {
+            name: "mock",
+            addr: mock.addr,
+        };
+
+        let mock_socket = mock.socket.clone();
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 1024];
+            let (_len, peer) = mock_socket.recv_from(&mut buf).await.unwrap();
+            let mut txn_id = [0u8; 12];
+            txn_id.copy_from_slice(&buf[8..20]);
+
+            let mut attrs = BytesMut::new();
+            attrs.put_u16(0x0001); // Dummy attribute
+            attrs.put_u16(4);
+            attrs.put_u32(0x01020304);
+
+            let mut msg = BytesMut::new();
+            msg.put_u16(0x0101);
+            msg.put_u16(attrs.len() as u16);
+            msg.put_u32(0x2112A442);
+            msg.put_slice(&txn_id);
+            msg.put_slice(&attrs);
+            let _ = mock_socket.send_to(&msg, peer).await;
+        });
+
+        let result = agent.stun_binding_request(&local_socket, &server).await;
+        assert!(result.is_err());
+    }
+
+    // Test: stun_binding_request with non-IPv4 XOR-MAPPED-ADDRESS family
+    #[tokio::test]
+    async fn test_stun_binding_request_non_ipv4_family() {
+        use bytes::{BufMut, BytesMut};
+
+        let config = IceConfig {
+            stun_servers: vec![],
+            ..Default::default()
+        };
+        let agent = IceAgent::new(config, IceRole::Controlling);
+
+        let local_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let mock = MockStunServer::new().await;
+        let server = StunServer {
+            name: "mock",
+            addr: mock.addr,
+        };
+
+        let mock_socket = mock.socket.clone();
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 1024];
+            let (_len, peer) = mock_socket.recv_from(&mut buf).await.unwrap();
+            let mut txn_id = [0u8; 12];
+            txn_id.copy_from_slice(&buf[8..20]);
+
+            let mut attrs = BytesMut::new();
+            attrs.put_u16(0x0020); // XOR-MAPPED-ADDRESS
+            attrs.put_u16(8);
+            attrs.put_u8(0);
+            attrs.put_u8(0x02); // IPv6 family
+            attrs.put_u16(0x1234);
+            attrs.put_u32(0x01020304);
+
+            let mut msg = BytesMut::new();
+            msg.put_u16(0x0101);
+            msg.put_u16(attrs.len() as u16);
+            msg.put_u32(0x2112A442);
+            msg.put_slice(&txn_id);
+            msg.put_slice(&attrs);
+            let _ = mock_socket.send_to(&msg, peer).await;
+        });
+
+        let result = agent.stun_binding_request(&local_socket, &server).await;
+        assert!(result.is_err());
+    }
+
+    // Test: stun_binding_request with short XOR-MAPPED-ADDRESS attribute
+    #[tokio::test]
+    async fn test_stun_binding_request_short_xor_attribute() {
+        use bytes::{BufMut, BytesMut};
+
+        let config = IceConfig {
+            stun_servers: vec![],
+            ..Default::default()
+        };
+        let agent = IceAgent::new(config, IceRole::Controlling);
+
+        let local_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let mock = MockStunServer::new().await;
+        let server = StunServer {
+            name: "mock",
+            addr: mock.addr,
+        };
+
+        let mock_socket = mock.socket.clone();
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 1024];
+            let (_len, peer) = mock_socket.recv_from(&mut buf).await.unwrap();
+            let mut txn_id = [0u8; 12];
+            txn_id.copy_from_slice(&buf[8..20]);
+
+            let mut attrs = BytesMut::new();
+            attrs.put_u16(0x0020); // XOR-MAPPED-ADDRESS
+            attrs.put_u16(4); // Too short
+            attrs.put_u32(0x01020304);
+
+            let mut msg = BytesMut::new();
+            msg.put_u16(0x0101);
+            msg.put_u16(attrs.len() as u16);
+            msg.put_u32(0x2112A442);
+            msg.put_slice(&txn_id);
+            msg.put_slice(&attrs);
+            let _ = mock_socket.send_to(&msg, peer).await;
+        });
+
+        let result = agent.stun_binding_request(&local_socket, &server).await;
+        assert!(result.is_err());
+    }
+
+    // Test: stun_binding_request with timeout
+    #[tokio::test]
+    async fn test_stun_binding_request_timeout() {
+        let config = IceConfig {
+            stun_servers: vec![],
+            check_timeout_ms: 10,
+            ..Default::default()
+        };
+        let agent = IceAgent::new(config, IceRole::Controlling);
+
+        let local_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let server_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = server_socket.local_addr().unwrap();
+
+        let server = StunServer {
+            name: "unreachable",
+            addr: server_addr,
+        };
+
+        tokio::spawn(async move {
+            let mut buf = [0u8; 1024];
+            let _ = server_socket.recv_from(&mut buf).await;
+        });
+
+        let result = agent.stun_binding_request(&local_socket, &server).await;
+        let err = result.unwrap_err();
+        assert_eq!(err.to_string(), "Request timeout");
+    }
+
+    // Test: stun_binding_request with recv error
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_stun_binding_request_recv_error() {
+        let config = IceConfig {
+            stun_servers: vec![],
+            check_timeout_ms: 10,
+            ..Default::default()
+        };
+        let agent = IceAgent::new(config, IceRole::Controlling);
+
+        let local_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let server_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = server_socket.local_addr().unwrap();
+
+        let server = StunServer {
+            name: "mock",
+            addr: server_addr,
+        };
+
+        force_stun_recv_error_once();
+        let result = agent.stun_binding_request(&local_socket, &server).await;
+        let err = result.unwrap_err();
+        assert_eq!(err.to_string(), "IO error: forced recv_from error");
     }
 
     // Test: stun_binding_request with invalid response (bad magic cookie)
@@ -1856,24 +2630,18 @@ mod tests {
         let mock_socket = mock.socket.clone();
         tokio::spawn(async move {
             let mut buf = vec![0u8; 1024];
-            if let Ok((len, peer)) = mock_socket.recv_from(&mut buf).await {
-                if len >= 20 {
-                    // Build response with bad magic cookie
-                    let mut msg = BytesMut::new();
-                    msg.put_u16(0x0101); // BINDING_RESPONSE
-                    msg.put_u16(0); // Length
-                    msg.put_u32(0xDEADBEEF); // Wrong magic cookie
-                    msg.put_slice(&buf[8..20]); // Transaction ID
-                    let _ = mock_socket.send_to(&msg, peer).await;
-                }
-            }
+            let (_len, peer) = mock_socket.recv_from(&mut buf).await.unwrap();
+            // Build response with bad magic cookie
+            let mut msg = BytesMut::new();
+            msg.put_u16(0x0101); // BINDING_RESPONSE
+            msg.put_u16(0); // Length
+            msg.put_u32(0xDEADBEEF); // Wrong magic cookie
+            msg.put_slice(&buf[8..20]); // Transaction ID
+            let _ = mock_socket.send_to(&msg, peer).await;
         });
 
         let result = agent.stun_binding_request(&local_socket, &server).await;
-        assert!(
-            result.is_err(),
-            "STUN request should fail with bad magic cookie"
-        );
+        assert!(result.is_err());
     }
 
     // Test: stun_binding_request with missing XOR-MAPPED-ADDRESS
@@ -1897,32 +2665,26 @@ mod tests {
         let mock_socket = mock.socket.clone();
         tokio::spawn(async move {
             let mut buf = vec![0u8; 1024];
-            if let Ok((len, peer)) = mock_socket.recv_from(&mut buf).await {
-                if len >= 20 {
-                    let mut txn_id = [0u8; 12];
-                    txn_id.copy_from_slice(&buf[8..20]);
+            let (_len, peer) = mock_socket.recv_from(&mut buf).await.unwrap();
+            let txn_id: [u8; 12] = buf[8..20].try_into().expect("short STUN request");
 
-                    // Build response without XOR-MAPPED-ADDRESS
-                    let mut msg = BytesMut::new();
-                    msg.put_u16(0x0101); // BINDING_RESPONSE
-                    msg.put_u16(0); // No attributes
-                    msg.put_u32(0x2112A442); // Magic cookie
-                    msg.put_slice(&txn_id);
-                    let _ = mock_socket.send_to(&msg, peer).await;
-                }
-            }
+            // Build response without XOR-MAPPED-ADDRESS
+            let mut msg = BytesMut::new();
+            msg.put_u16(0x0101); // BINDING_RESPONSE
+            msg.put_u16(0); // No attributes
+            msg.put_u32(0x2112A442); // Magic cookie
+            msg.put_slice(&txn_id);
+            let _ = mock_socket.send_to(&msg, peer).await;
         });
 
         let result = agent.stun_binding_request(&local_socket, &server).await;
-        assert!(
-            result.is_err(),
-            "STUN request should fail without mapped address"
-        );
+        assert!(result.is_err());
     }
 
     // Test: gather_srflx_candidates with STUN server
     #[tokio::test]
     async fn test_gather_srflx_candidates() {
+        init_tracing();
         // Create mock STUN server
         let mock = MockStunServer::new().await;
 
@@ -1944,14 +2706,10 @@ mod tests {
         tokio::spawn(async move {
             let mut buf = vec![0u8; 1024];
             // Respond to first request only
-            if let Ok((len, peer)) = mock_socket.recv_from(&mut buf).await {
-                if len >= 20 {
-                    let mut txn_id = [0u8; 12];
-                    txn_id.copy_from_slice(&buf[8..20]);
-                    let response = MockStunServer::build_binding_response(&txn_id, mapped_addr);
-                    let _ = mock_socket.send_to(&response, peer).await;
-                }
-            }
+            let (_len, peer) = mock_socket.recv_from(&mut buf).await.unwrap();
+            let txn_id: [u8; 12] = buf[8..20].try_into().expect("short STUN request");
+            let response = MockStunServer::build_binding_response(&txn_id, mapped_addr);
+            let _ = mock_socket.send_to(&response, peer).await;
         });
 
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
@@ -1960,13 +2718,79 @@ mod tests {
         let srflx_candidates = agent.gather_srflx_candidates().await;
 
         // Should have at least one srflx candidate
-        assert!(
-            !srflx_candidates.is_empty(),
-            "Should gather srflx candidates"
-        );
+        assert!(!srflx_candidates.is_empty());
         assert!(srflx_candidates
             .iter()
             .any(|c| c.candidate_type == CandidateType::ServerReflexive));
+    }
+
+    // Test: gather_srflx_candidates ignores mapped address equal to base
+    #[tokio::test]
+    async fn test_gather_srflx_candidates_ignores_base_address() {
+        let mock = MockStunServer::new().await;
+
+        let config = IceConfig {
+            stun_servers: vec![StunServer {
+                name: "mock",
+                addr: mock.addr,
+            }],
+            ..Default::default()
+        };
+        let agent = IceAgent::new(config, IceRole::Controlling);
+
+        let local_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let local_addr = local_socket.local_addr().unwrap();
+        agent
+            .sockets
+            .write()
+            .await
+            .insert(local_addr, Arc::new(local_socket));
+
+        let mock_socket = mock.socket.clone();
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 1024];
+            let (_len, peer) = mock_socket.recv_from(&mut buf).await.unwrap();
+            let mut txn_id = [0u8; 12];
+            txn_id.copy_from_slice(&buf[8..20]);
+            let response = MockStunServer::build_binding_response(&txn_id, local_addr);
+            let _ = mock_socket.send_to(&response, peer).await;
+        });
+
+        let srflx_candidates = agent.gather_srflx_candidates().await;
+        assert!(srflx_candidates.is_empty());
+    }
+
+    // Test: gather_srflx_candidates handles STUN error
+    #[tokio::test]
+    async fn test_gather_srflx_candidates_stun_error() {
+        let mock = MockStunServer::new().await;
+
+        let config = IceConfig {
+            stun_servers: vec![StunServer {
+                name: "mock",
+                addr: mock.addr,
+            }],
+            ..Default::default()
+        };
+        let agent = IceAgent::new(config, IceRole::Controlling);
+
+        let local_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let local_addr = local_socket.local_addr().unwrap();
+        agent
+            .sockets
+            .write()
+            .await
+            .insert(local_addr, Arc::new(local_socket));
+
+        let mock_socket = mock.socket.clone();
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 1024];
+            let (_len, peer) = mock_socket.recv_from(&mut buf).await.unwrap();
+            let _ = mock_socket.send_to(&[0u8; 8], peer).await;
+        });
+
+        let srflx_candidates = agent.gather_srflx_candidates().await;
+        assert!(srflx_candidates.is_empty());
     }
 
     // Test: fallback_selection prefers host-to-host pairs
@@ -2037,7 +2861,7 @@ mod tests {
 
         // Should only have 1 pair (no duplicates)
         let pairs = agent.candidate_pairs.read().await;
-        assert_eq!(pairs.len(), 1, "Should not create duplicate pairs");
+        assert_eq!(pairs.len(), 1);
     }
 
     // Test: form_candidate_pairs initializes with Frozen state
@@ -2075,7 +2899,7 @@ mod tests {
             .iter()
             .filter(|p| p.state == PairState::Waiting)
             .count();
-        assert!(waiting_count > 0, "At least one pair should be Waiting");
+        assert!(waiting_count > 0);
     }
 
     // Test: start_checks updates pair states correctly
@@ -2110,9 +2934,8 @@ mod tests {
 
         {
             let mut pairs = agent.candidate_pairs.write().await;
-            if let Some(pair) = pairs.get_mut(0) {
-                pair.state = PairState::Waiting;
-            }
+            let pair = pairs.get_mut(0).expect("missing candidate pair");
+            pair.state = PairState::Waiting;
         }
 
         // Start checks - should fail and go to fallback
@@ -2120,10 +2943,95 @@ mod tests {
 
         // Check pair state was updated to Failed
         let pairs = agent.candidate_pairs.read().await;
-        assert!(
-            pairs.iter().any(|p| p.state == PairState::Failed),
-            "Failed check should mark pair as Failed"
-        );
+        assert!(pairs.iter().any(|p| p.state == PairState::Failed));
+    }
+
+    // Test: start_checks succeeds and nominates for controlling role
+    #[tokio::test]
+    async fn test_start_checks_success_controlling() {
+        let config = IceConfig {
+            stun_servers: vec![],
+            check_timeout_ms: 500,
+            ..Default::default()
+        };
+        let agent = IceAgent::new(config, IceRole::Controlling);
+
+        agent.set_remote_credentials("remoteusr", "remotepwd").await;
+
+        let local_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let local_addr = local_socket.local_addr().unwrap();
+        let local_cand = Candidate::host(local_addr, 1);
+        agent.local_candidates.write().await.push(local_cand);
+        agent
+            .sockets
+            .write()
+            .await
+            .insert(local_addr, Arc::new(local_socket));
+
+        let mock = MockStunServer::new().await;
+        let remote_cand = Candidate::host(mock.addr, 1);
+        agent.add_remote_candidates(vec![remote_cand]).await;
+
+        let mock_socket = mock.socket.clone();
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 1024];
+            let (_len, peer) = mock_socket.recv_from(&mut buf).await.unwrap();
+            let mut txn_id = [0u8; 12];
+            txn_id.copy_from_slice(&buf[8..20]);
+            let response = MockStunServer::build_connectivity_check_response(&txn_id);
+            let _ = mock_socket.send_to(&response, peer).await;
+        });
+
+        let result = agent.start_checks().await;
+        assert!(result.is_ok());
+
+        let selected = agent.selected_pair().await;
+        assert!(selected.is_some());
+        assert!(selected.unwrap().nominated);
+    }
+
+    // Test: start_checks succeeds without nomination when controlled
+    #[tokio::test]
+    async fn test_start_checks_success_controlled() {
+        let config = IceConfig {
+            stun_servers: vec![],
+            check_timeout_ms: 500,
+            ..Default::default()
+        };
+        let agent = IceAgent::new(config, IceRole::Controlled);
+
+        agent.set_remote_credentials("remoteusr", "remotepwd").await;
+
+        let local_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let local_addr = local_socket.local_addr().unwrap();
+        let local_cand = Candidate::host(local_addr, 1);
+        agent.local_candidates.write().await.push(local_cand);
+        agent
+            .sockets
+            .write()
+            .await
+            .insert(local_addr, Arc::new(local_socket));
+
+        let mock = MockStunServer::new().await;
+        let remote_cand = Candidate::host(mock.addr, 1);
+        agent.add_remote_candidates(vec![remote_cand]).await;
+
+        let mock_socket = mock.socket.clone();
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 1024];
+            let (_len, peer) = mock_socket.recv_from(&mut buf).await.unwrap();
+            let mut txn_id = [0u8; 12];
+            txn_id.copy_from_slice(&buf[8..20]);
+            let response = MockStunServer::build_connectivity_check_response(&txn_id);
+            let _ = mock_socket.send_to(&response, peer).await;
+        });
+
+        let result = agent.start_checks().await;
+        assert!(result.is_ok());
+
+        let selected = agent.selected_pair().await;
+        assert!(selected.is_some());
+        assert!(!selected.unwrap().nominated);
     }
 
     // Test: Controlled agent uses correct ICE-CONTROLLED attribute
@@ -2154,18 +3062,19 @@ mod tests {
 
         // Spawn server to check for ICE-CONTROLLED attribute
         let mock_socket = mock.socket.clone();
+        let (controlled_tx, controlled_rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
             let mut buf = vec![0u8; 1024];
-            if let Ok((len, peer)) = mock_socket.recv_from(&mut buf).await {
+            for _ in 0..2 {
+                let (len, peer) = mock_socket.recv_from(&mut buf).await.unwrap();
                 // Check for ICE-CONTROLLED attribute (0x8029)
                 let has_controlled = buf[..len].windows(2).any(|w| w[0] == 0x80 && w[1] == 0x29);
+                let _ = controlled_tx.send(has_controlled);
 
-                if has_controlled && len >= 20 {
-                    let mut txn_id = [0u8; 12];
-                    txn_id.copy_from_slice(&buf[8..20]);
-                    let response = MockStunServer::build_connectivity_check_response(&txn_id);
-                    let _ = mock_socket.send_to(&response, peer).await;
-                }
+                let txn_id: [u8; 12] = buf[8..20].try_into().expect("short STUN request");
+                let response = MockStunServer::build_connectivity_check_response(&txn_id);
+                let _ = mock_socket.send_to(&response, peer).await;
+                break;
             }
         });
 
@@ -2173,7 +3082,8 @@ mod tests {
             .perform_connectivity_check(&local_socket, &pair, "remoteufrag", "remotepwd")
             .await;
 
-        assert!(result, "Check should succeed with ICE-CONTROLLED attribute");
+        assert!(result);
+        assert!(controlled_rx.await.unwrap_or(false));
     }
 
     // Test: remote credentials update
@@ -2196,6 +3106,32 @@ mod tests {
         let (ufrag, pwd) = agent.remote_credentials().await.unwrap();
         assert_eq!(ufrag, "user2");
         assert_eq!(pwd, "pass2");
+    }
+
+    #[tokio::test]
+    async fn test_remote_credentials_missing_password() {
+        let config = IceConfig {
+            stun_servers: vec![],
+            ..Default::default()
+        };
+        let agent = IceAgent::new(config, IceRole::Controlling);
+
+        *agent.remote_ufrag.write().await = Some("user".to_string());
+        let creds = agent.remote_credentials().await;
+        assert!(creds.is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_gather_candidates_forced_local_addr_error() {
+        let config = IceConfig {
+            stun_servers: vec![],
+            ..Default::default()
+        };
+        let agent = IceAgent::new(config, IceRole::Controlling);
+
+        force_host_local_addr_error_once();
+        let result = agent.gather_candidates().await;
+        assert!(result.is_err());
     }
 
     // Test: pair priority calculation differs between controlling and controlled
@@ -2239,10 +3175,7 @@ mod tests {
         let pairs_controlling = agent_controlling.candidate_pairs.read().await;
         let pairs_controlled = agent_controlled.candidate_pairs.read().await;
 
-        assert_eq!(
-            pairs_controlling[0].priority, pairs_controlled[0].priority,
-            "Same pair should have same priority from both perspectives"
-        );
+        assert_eq!(pairs_controlling[0].priority, pairs_controlled[0].priority);
     }
 
     // Test: gather_candidates sets state to Gathering
@@ -2321,35 +3254,19 @@ mod tests {
 
         // Spawn server to check USERNAME attribute format
         let mock_socket = mock.socket.clone();
+        let (username_tx, username_rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
             let mut buf = vec![0u8; 1024];
-            if let Ok((len, peer)) = mock_socket.recv_from(&mut buf).await {
-                // Look for USERNAME attribute (0x0006)
-                let mut found_username = false;
-                let mut i = 20; // Start after header
-                while i + 4 <= len {
-                    let attr_type = u16::from_be_bytes([buf[i], buf[i + 1]]);
-                    let attr_len = u16::from_be_bytes([buf[i + 2], buf[i + 3]]) as usize;
+            for _ in 0..2 {
+                let (len, peer) = mock_socket.recv_from(&mut buf).await.unwrap();
+                let payload = String::from_utf8_lossy(&buf[..len]);
+                let found_username = payload.contains("remoteusr") & payload.contains("localusr");
 
-                    if attr_type == 0x0006 && i + 4 + attr_len <= len {
-                        // Found USERNAME
-                        let username = String::from_utf8_lossy(&buf[i + 4..i + 4 + attr_len]);
-                        // Should be "remoteusr:localusr"
-                        found_username =
-                            username.contains("remoteusr") && username.contains("localusr");
-                        break;
-                    }
-
-                    let padded_len = (attr_len + 3) & !3;
-                    i += 4 + padded_len;
-                }
-
-                if found_username && len >= 20 {
-                    let mut txn_id = [0u8; 12];
-                    txn_id.copy_from_slice(&buf[8..20]);
-                    let response = MockStunServer::build_connectivity_check_response(&txn_id);
-                    let _ = mock_socket.send_to(&response, peer).await;
-                }
+                let _ = username_tx.send(found_username);
+                let txn_id: [u8; 12] = buf[8..20].try_into().expect("short STUN request");
+                let response = MockStunServer::build_connectivity_check_response(&txn_id);
+                let _ = mock_socket.send_to(&response, peer).await;
+                break;
             }
         });
 
@@ -2357,6 +3274,7 @@ mod tests {
             .perform_connectivity_check(&local_socket, &pair, "remoteusr", "remotepwd")
             .await;
 
-        assert!(result, "Check should succeed with correct USERNAME format");
+        assert!(result);
+        assert!(username_rx.await.unwrap_or(false));
     }
 }

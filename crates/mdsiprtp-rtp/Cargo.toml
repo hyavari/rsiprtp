@@ -12,3 +12,6 @@ thiserror.workspace = true
 bytes.workspace = true
 rand.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+tracing-subscriber = "0.3"

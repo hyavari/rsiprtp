@@ -40,19 +40,19 @@ mod tests {
         // Generate multiple values and verify they're different
         let values: HashSet<u16> = (0..100).map(|_| random_u16()).collect();
         // With 100 random u16 values, we should have at least 90 unique
-        assert!(values.len() >= 90, "Random values should be distributed");
+        assert!(values.len() >= 90);
     }
 
     #[test]
     fn test_random_u32_distribution() {
         let values: HashSet<u32> = (0..100).map(|_| random_u32()).collect();
         // With 100 random u32 values, we should have 100 unique (collision extremely unlikely)
-        assert_eq!(values.len(), 100, "All u32 values should be unique");
+        assert_eq!(values.len(), 100);
     }
 
     #[test]
     fn test_random_u64_distribution() {
         let values: HashSet<u64> = (0..100).map(|_| random_u64()).collect();
-        assert_eq!(values.len(), 100, "All u64 values should be unique");
+        assert_eq!(values.len(), 100);
     }
 }

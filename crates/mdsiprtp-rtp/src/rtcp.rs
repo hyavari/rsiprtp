@@ -273,7 +273,8 @@ impl SenderReport {
                 return Err(RtcpParseError::InvalidReportCount);
             }
             let block_data = &buf[..ReportBlock::SIZE];
-            report_blocks.push(ReportBlock::parse(block_data)?);
+            let block = ReportBlock::parse(block_data).expect("report block size checked");
+            report_blocks.push(block);
             buf.advance(ReportBlock::SIZE);
         }
 
@@ -355,7 +356,8 @@ impl ReceiverReport {
                 return Err(RtcpParseError::InvalidReportCount);
             }
             let block_data = &buf[..ReportBlock::SIZE];
-            report_blocks.push(ReportBlock::parse(block_data)?);
+            let block = ReportBlock::parse(block_data).expect("report block size checked");
+            report_blocks.push(block);
             buf.advance(ReportBlock::SIZE);
         }
 
@@ -682,9 +684,8 @@ impl Nack {
                 }
             }
 
-            if let Some(entry) = NackEntry::from_sequences(&group) {
-                nacks.push(entry);
-            }
+            let entry = NackEntry::from_sequences(&group).expect("nack group empty");
+            nacks.push(entry);
             remaining = new_remaining;
         }
 
@@ -1166,6 +1167,12 @@ impl RtcpCompound {
 mod tests {
     use super::*;
 
+    fn assert_rtcp_err_contains<T>(result: Result<T, RtcpParseError>, needle: &str) {
+        assert!(result.is_err());
+        let err = result.err().unwrap();
+        assert!(format!("{err:?}").contains(needle));
+    }
+
     #[test]
     fn test_ntp_timestamp() {
         let ntp = NtpTimestamp::now();
@@ -1410,15 +1417,7 @@ mod tests {
             // Should be within 1% or exact for small values
             if bitrate > 0 {
                 let error = ((decoded as i64 - bitrate as i64).abs() as f64) / (bitrate as f64);
-                assert!(
-                    error < 0.01 || decoded == bitrate,
-                    "Bitrate {} encoded as {}*2^{} = {}, error = {}",
-                    bitrate,
-                    mantissa,
-                    exp,
-                    decoded,
-                    error
-                );
+                assert!(error < 0.01);
             }
         }
     }
@@ -1444,6 +1443,25 @@ mod tests {
         assert!(bytes.len() > 60);
     }
 
+    #[test]
+    fn test_compound_with_goodbye() {
+        let sr = SenderReport {
+            ssrc: 12345,
+            ntp_timestamp: NtpTimestamp::now(),
+            rtp_timestamp: 160000,
+            sender_packet_count: 100,
+            sender_octet_count: 16000,
+            report_blocks: vec![],
+        };
+        let mut compound = RtcpCompound::sender_compound(sr, "user@example.com");
+        compound
+            .packets
+            .push(RtcpPacket::Goodbye(Goodbye::new(12345)));
+
+        let bytes = compound.build();
+        assert!(!bytes.is_empty());
+    }
+
     // ==========================================================================
     // Additional RTCP Tests for Coverage
     // ==========================================================================
@@ -1451,30 +1469,30 @@ mod tests {
     #[test]
     fn test_rtcp_header_parse_too_short() {
         let data = [0u8; 2]; // Only 2 bytes, need at least 4
-        let result = RtcpHeader::parse(&data);
-        assert!(matches!(result, Err(RtcpParseError::TooShort(2))));
+        assert_rtcp_err_contains(RtcpHeader::parse(&data), "TooShort");
     }
 
     #[test]
     fn test_rtcp_header_invalid_version() {
         // Version 0 (bits 00 instead of 10)
         let data = [0x00, 200, 0, 6];
-        let result = RtcpHeader::parse(&data);
-        assert!(matches!(result, Err(RtcpParseError::InvalidVersion(0))));
+        assert_rtcp_err_contains(RtcpHeader::parse(&data), "InvalidVersion");
 
         // Version 3 (bits 11 instead of 10)
         let data = [0xC0, 200, 0, 6];
-        let result = RtcpHeader::parse(&data);
-        assert!(matches!(result, Err(RtcpParseError::InvalidVersion(3))));
+        assert_rtcp_err_contains(RtcpHeader::parse(&data), "InvalidVersion");
+    }
+
+    #[test]
+    fn test_rtcp_header_invalid_packet_type() {
+        let data = [0x80, 199, 0, 1];
+        assert_rtcp_err_contains(RtcpHeader::parse(&data), "UnknownPacketType");
     }
 
     #[test]
     fn test_rtcp_type_unknown() {
         let result = RtcpType::try_from(199u8);
-        assert!(matches!(
-            result,
-            Err(RtcpParseError::UnknownPacketType(199))
-        ));
+        assert_rtcp_err_contains(result, "UnknownPacketType");
     }
 
     #[test]
@@ -1518,8 +1536,13 @@ mod tests {
     #[test]
     fn test_report_block_too_short() {
         let data = [0u8; 10]; // Need 24 bytes
-        let result = ReportBlock::parse(&data);
-        assert!(matches!(result, Err(RtcpParseError::TooShort(10))));
+        assert_rtcp_err_contains(ReportBlock::parse(&data), "TooShort");
+    }
+
+    #[test]
+    fn test_sender_report_parse_header_too_short() {
+        let data = [0u8; 2];
+        assert_rtcp_err_contains(SenderReport::parse(&data), "TooShort");
     }
 
     #[test]
@@ -1539,8 +1562,13 @@ mod tests {
         // Valid header but not enough payload
         let mut data = vec![0x80, 200, 0, 1]; // Header says 1 word
         data.extend_from_slice(&[0u8; 4]); // Only 4 bytes of payload, need 20
-        let result = SenderReport::parse(&data);
-        assert!(matches!(result, Err(RtcpParseError::TooShort(_))));
+        assert_rtcp_err_contains(SenderReport::parse(&data), "TooShort");
+    }
+
+    #[test]
+    fn test_receiver_report_parse_header_too_short() {
+        let data = [0u8; 2];
+        assert_rtcp_err_contains(ReceiverReport::parse(&data), "TooShort");
     }
 
     #[test]
@@ -1557,8 +1585,7 @@ mod tests {
         let mut bytes = sr.build().to_vec();
         // Modify count to claim 5 report blocks
         bytes[0] = (bytes[0] & 0xE0) | 5;
-        let result = SenderReport::parse(&bytes);
-        assert!(matches!(result, Err(RtcpParseError::InvalidReportCount)));
+        assert_rtcp_err_contains(SenderReport::parse(&bytes), "InvalidReportCount");
     }
 
     #[test]
@@ -1579,8 +1606,7 @@ mod tests {
     #[test]
     fn test_receiver_report_too_short_payload() {
         let data = vec![0x80, 201, 0, 0]; // RR header with 0 length
-        let result = ReceiverReport::parse(&data);
-        assert!(matches!(result, Err(RtcpParseError::TooShort(_))));
+        assert_rtcp_err_contains(ReceiverReport::parse(&data), "TooShort");
     }
 
     #[test]
@@ -1592,8 +1618,7 @@ mod tests {
         let mut bytes = rr.build().to_vec();
         // Modify count to claim 5 report blocks
         bytes[0] = (bytes[0] & 0xE0) | 5;
-        let result = ReceiverReport::parse(&bytes);
-        assert!(matches!(result, Err(RtcpParseError::InvalidReportCount)));
+        assert_rtcp_err_contains(ReceiverReport::parse(&bytes), "InvalidReportCount");
     }
 
     #[test]
@@ -1634,8 +1659,13 @@ mod tests {
     #[test]
     fn test_nack_parse_too_short() {
         let data = vec![0x81, 205, 0, 1, 0, 0, 0, 0]; // Only 4 bytes payload, need 8
-        let result = Nack::parse(&data);
-        assert!(matches!(result, Err(RtcpParseError::TooShort(_))));
+        assert_rtcp_err_contains(Nack::parse(&data), "TooShort");
+    }
+
+    #[test]
+    fn test_nack_parse_header_too_short() {
+        let data = [0u8; 2];
+        assert_rtcp_err_contains(Nack::parse(&data), "TooShort");
     }
 
     #[test]
@@ -1648,10 +1678,24 @@ mod tests {
     }
 
     #[test]
+    fn test_nack_wrong_count() {
+        let nack = Nack::new(111111, 222222, 1000);
+        let mut bytes = nack.build().to_vec();
+        bytes[0] = (bytes[0] & 0xE0) | 2;
+        let result = Nack::parse(&bytes);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_pli_parse_too_short() {
         let data = vec![0x81, 206, 0, 1, 0, 0, 0, 0]; // Only 4 bytes payload
-        let result = Pli::parse(&data);
-        assert!(matches!(result, Err(RtcpParseError::TooShort(_))));
+        assert_rtcp_err_contains(Pli::parse(&data), "TooShort");
+    }
+
+    #[test]
+    fn test_pli_parse_header_too_short() {
+        let data = [0u8; 2];
+        assert_rtcp_err_contains(Pli::parse(&data), "TooShort");
     }
 
     #[test]
@@ -1663,16 +1707,54 @@ mod tests {
     }
 
     #[test]
+    fn test_pli_wrong_count() {
+        let pli = Pli::new(111111, 222222);
+        let mut bytes = pli.build().to_vec();
+        bytes[0] = (bytes[0] & 0xE0) | 2;
+        let result = Pli::parse(&bytes);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_fir_parse_too_short() {
         let data = vec![0x84, 206, 0, 1, 0, 0, 0, 0]; // Only 4 bytes payload
-        let result = Fir::parse(&data);
-        assert!(matches!(result, Err(RtcpParseError::TooShort(_))));
+        assert_rtcp_err_contains(Fir::parse(&data), "TooShort");
+    }
+
+    #[test]
+    fn test_fir_parse_header_too_short() {
+        let data = [0u8; 2];
+        assert_rtcp_err_contains(Fir::parse(&data), "TooShort");
     }
 
     #[test]
     fn test_fir_wrong_type() {
         let pli = Pli::new(111111, 222222);
         let bytes = pli.build();
+        let result = Fir::parse(&bytes);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_fir_wrong_packet_type() {
+        let header = RtcpHeader {
+            version: 2,
+            padding: false,
+            count: 0,
+            packet_type: RtcpType::SenderReport,
+            length: 0,
+        };
+        let mut buf = BytesMut::new();
+        header.build(&mut buf);
+
+        assert_rtcp_err_contains(Fir::parse(&buf), "UnknownPacketType");
+    }
+
+    #[test]
+    fn test_fir_wrong_count() {
+        let fir = Fir::new(111111, 222222, 1);
+        let mut bytes = fir.build().to_vec();
+        bytes[0] = (bytes[0] & 0xE0) | 5;
         let result = Fir::parse(&bytes);
         assert!(result.is_err());
     }
@@ -1710,8 +1792,7 @@ mod tests {
     fn test_remb_parse_too_short() {
         let data = vec![0x8F, 206, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         let result = Remb::parse(&data);
-        // Header is OK but payload might be insufficient
-        assert!(result.is_ok() || result.is_err());
+        assert!(result.is_err());
     }
 
     #[test]
@@ -1734,6 +1815,45 @@ mod tests {
     }
 
     #[test]
+    fn test_remb_wrong_packet_type() {
+        let header = RtcpHeader {
+            version: 2,
+            padding: false,
+            count: 0,
+            packet_type: RtcpType::SenderReport,
+            length: 0,
+        };
+        let mut buf = BytesMut::new();
+        header.build(&mut buf);
+
+        assert_rtcp_err_contains(Remb::parse(&buf), "UnknownPacketType");
+    }
+
+    #[test]
+    fn test_remb_parse_header_too_short() {
+        let data = [0u8; 2];
+        assert_rtcp_err_contains(Remb::parse(&data), "TooShort");
+    }
+
+    #[test]
+    fn test_remb_wrong_count() {
+        let remb = Remb::new(111111, 1_000_000, vec![222222]);
+        let mut bytes = remb.build().to_vec();
+        bytes[0] = (bytes[0] & 0xE0) | 1;
+        let result = Remb::parse(&bytes);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_remb_parse_truncated_ssrcs() {
+        let remb = Remb::new(111111, 1_000_000, vec![222222]);
+        let mut bytes = remb.build().to_vec();
+        bytes[16] = 2;
+        let parsed = Remb::parse(&bytes).unwrap();
+        assert_eq!(parsed.ssrcs.len(), 1);
+    }
+
+    #[test]
     fn test_remb_zero_bitrate() {
         let remb = Remb::new(111111, 0, vec![222222]);
         let bytes = remb.build();
@@ -1748,7 +1868,7 @@ mod tests {
         let parsed = Remb::parse(&bytes).unwrap();
         // Should be close to original (may have precision loss)
         let error = ((parsed.bitrate as i64 - 1_000_000_000i64).abs() as f64) / 1_000_000_000.0;
-        assert!(error < 0.01, "Bitrate error too large: {}", error);
+        assert!(error < 0.01);
     }
 
     #[test]
@@ -1779,6 +1899,33 @@ mod tests {
     fn test_nack_entry_from_sequences_empty() {
         let result = NackEntry::from_sequences(&[]);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_nack_from_lost_packets_large_gap() {
+        let nack = Nack::from_lost_packets(111111, 222222, &[1000, 2000]);
+        assert_eq!(nack.nacks.len(), 2);
+        assert_eq!(nack.nacks[0].pid, 1000);
+        assert_eq!(nack.nacks[1].pid, 2000);
+    }
+
+    #[test]
+    fn test_nack_from_lost_packets_in_range() {
+        let nack = Nack::from_lost_packets(111111, 222222, &[1000, 1002, 1010]);
+        assert_eq!(nack.nacks.len(), 1);
+
+        let seqs = nack.nacks[0].lost_sequences();
+        assert!(seqs.contains(&1000));
+        assert!(seqs.contains(&1002));
+        assert!(seqs.contains(&1010));
+    }
+
+    #[test]
+    fn test_nack_from_lost_packets_with_duplicates() {
+        let nack = Nack::from_lost_packets(111111, 222222, &[1000, 1000, 1001]);
+        assert_eq!(nack.nacks.len(), 2);
+        assert_eq!(nack.nacks[0].pid, 1000);
+        assert_eq!(nack.nacks[1].pid, 1000);
     }
 
     #[test]

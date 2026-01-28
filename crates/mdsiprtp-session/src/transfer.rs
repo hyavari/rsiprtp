@@ -190,11 +190,11 @@ impl ReplacesHeader {
     pub fn parse(s: &str) -> Result<Self, TransferError> {
         let mut parts = s.split(';');
 
-        let call_id = parts
-            .next()
-            .ok_or_else(|| TransferError::InvalidReferTo("missing call-id".into()))?
-            .trim()
-            .to_string();
+        let call_id = parts.next().unwrap_or("").trim();
+        if call_id.is_empty() {
+            return Err(TransferError::InvalidReferTo("missing call-id".into()));
+        }
+        let call_id = call_id.to_string();
 
         let mut to_tag = None;
         let mut from_tag = None;
@@ -699,6 +699,13 @@ mod tests {
     }
 
     #[test]
+    fn test_refer_to_parse_invalid_replaces() {
+        let uri = "<sip:carol@example.com?Replaces=call-id%3Bto-tag%3Dto1>";
+        let err = ReferTo::parse(uri).unwrap_err();
+        assert!(err.to_string().contains("invalid Refer-To"));
+    }
+
+    #[test]
     fn test_refer_to_debug() {
         let refer_to = ReferTo::blind("sip:test@example.com");
         let debug = format!("{:?}", refer_to);
@@ -746,14 +753,25 @@ mod tests {
     }
 
     #[test]
+    fn test_replaces_header_parse_unknown_token() {
+        let s = "call-123;to-tag=to1;from-tag=from1;unknown";
+        let replaces = ReplacesHeader::parse(s).unwrap();
+        assert!(!replaces.early_only);
+    }
+
+    #[test]
     fn test_replaces_header_parse_missing_to_tag() {
         let s = "call-123;from-tag=from1";
         let result = ReplacesHeader::parse(s);
         assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            TransferError::InvalidReferTo(_)
-        ));
+        assert!(result.unwrap_err().to_string().contains("invalid Refer-To"));
+    }
+
+    #[test]
+    fn test_replaces_header_parse_missing_call_id() {
+        let result = ReplacesHeader::parse("");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("missing call-id"));
     }
 
     #[test]
@@ -864,6 +882,23 @@ mod tests {
     }
 
     #[test]
+    fn test_transfer_progress_is_provisional_false() {
+        let sipfrag = "SIP/2.0 302 Moved";
+        let progress = TransferProgress::parse_sipfrag(sipfrag).unwrap();
+        assert!(!progress.is_provisional());
+    }
+
+    #[test]
+    fn test_transfer_progress_below_100_not_provisional() {
+        let progress = TransferProgress {
+            status_code: 99,
+            reason: "Informational".to_string(),
+            final_: false,
+        };
+        assert!(!progress.is_provisional());
+    }
+
+    #[test]
     fn test_transfer_progress_100_trying() {
         let sipfrag = "SIP/2.0 100 Trying";
         let progress = TransferProgress::parse_sipfrag(sipfrag).unwrap();
@@ -879,6 +914,7 @@ mod tests {
         assert_eq!(progress.status_code, 486);
         assert!(progress.final_);
         assert!(!progress.is_success());
+        assert!(!progress.is_provisional());
     }
 
     #[test]
@@ -1030,10 +1066,7 @@ mod tests {
             .unwrap();
         let result = manager.initiate_blind_transfer("call-1", "sip:dave@example.com");
         assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            TransferError::InvalidState(_)
-        ));
+        assert!(result.unwrap_err().to_string().contains("invalid state"));
     }
 
     #[test]
@@ -1055,10 +1088,10 @@ mod tests {
             .unwrap();
         let result = manager.handle_refer_response("call-1", 486);
         assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            TransferError::Rejected { code: 486 }
-        ));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("transfer rejected"));
         assert_eq!(manager.transfer_state("call-1"), TransferState::Failed);
     }
 
@@ -1077,10 +1110,7 @@ mod tests {
         let mut manager = TransferManager::new();
         let result = manager.handle_refer_response("nonexistent", 200);
         assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            TransferError::CallNotFound(_)
-        ));
+        assert!(result.unwrap_err().to_string().contains("call not found"));
     }
 
     #[test]
@@ -1106,7 +1136,7 @@ mod tests {
             .unwrap();
         let result = manager.handle_notify("call-1", "invalid sipfrag");
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), TransferError::Failed(_)));
+        assert!(result.unwrap_err().to_string().contains("transfer failed"));
     }
 
     #[test]

@@ -15,6 +15,9 @@ use tokio::net::UdpSocket;
 use tokio::time::timeout;
 use tracing::{debug, trace};
 
+#[cfg(test)]
+use std::sync::atomic::{AtomicU64, Ordering};
+
 type HmacSha1 = Hmac<Sha1>;
 
 /// STUN magic cookie.
@@ -83,6 +86,144 @@ pub enum TurnError {
     NotAllocated,
 }
 
+#[cfg(test)]
+static FORCE_BIND_ERROR: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static FORCE_CONNECT_ERROR: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static FORCE_LOCAL_ADDR_ERROR: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static FORCE_SEND_ERROR: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static FORCE_RECV_ERROR: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static FORCE_AUTH_SEND_ERROR: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(test)]
+fn force_bind_error_once() {
+    FORCE_BIND_ERROR.store(current_thread_id(), Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn force_connect_error_once() {
+    FORCE_CONNECT_ERROR.store(current_thread_id(), Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn force_local_addr_error_once() {
+    FORCE_LOCAL_ADDR_ERROR.store(current_thread_id(), Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn force_send_error_once() {
+    FORCE_SEND_ERROR.store(current_thread_id(), Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn force_recv_error_once() {
+    FORCE_RECV_ERROR.store(current_thread_id(), Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn force_auth_send_error_once() {
+    FORCE_AUTH_SEND_ERROR.store(current_thread_id(), Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn take_forced_error(flag: &AtomicU64, message: &str) -> Option<std::io::Error> {
+    let current = current_thread_id();
+    if flag.load(Ordering::SeqCst) == current {
+        let _ = flag.compare_exchange(current, 0, Ordering::SeqCst, Ordering::SeqCst);
+        Some(std::io::Error::new(std::io::ErrorKind::Other, message))
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+fn current_thread_id() -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::thread::current().id().hash(&mut hasher);
+    let id = hasher.finish();
+    normalize_thread_id(id)
+}
+
+#[cfg(test)]
+fn normalize_thread_id(id: u64) -> u64 {
+    if id == 0 {
+        1
+    } else {
+        id
+    }
+}
+
+async fn bind_socket() -> Result<UdpSocket, TurnError> {
+    let socket = socket_bind("0.0.0.0:0").await.map_err(TurnError::Io)?;
+    Ok(socket)
+}
+
+async fn socket_bind(addr: &str) -> Result<UdpSocket, std::io::Error> {
+    #[cfg(test)]
+    if let Some(err) = take_forced_error(&FORCE_BIND_ERROR, "forced bind error") {
+        return Err(err);
+    }
+    UdpSocket::bind(addr).await
+}
+
+async fn connect_socket(socket: &UdpSocket, addr: SocketAddr) -> Result<(), TurnError> {
+    socket_connect(socket, addr).await.map_err(TurnError::Io)?;
+    Ok(())
+}
+
+async fn socket_connect(socket: &UdpSocket, addr: SocketAddr) -> Result<(), std::io::Error> {
+    #[cfg(test)]
+    if let Some(err) = take_forced_error(&FORCE_CONNECT_ERROR, "forced connect error") {
+        return Err(err);
+    }
+    socket.connect(&addr).await
+}
+
+fn socket_local_addr(socket: &UdpSocket) -> Result<SocketAddr, TurnError> {
+    socket_local_addr_inner(socket).map_err(TurnError::Io)
+}
+
+fn socket_local_addr_inner(socket: &UdpSocket) -> Result<SocketAddr, std::io::Error> {
+    #[cfg(test)]
+    if let Some(err) = take_forced_error(&FORCE_LOCAL_ADDR_ERROR, "forced local_addr error") {
+        return Err(err);
+    }
+    socket.local_addr()
+}
+
+async fn socket_send(socket: &UdpSocket, data: &[u8]) -> Result<(), TurnError> {
+    socket_send_inner(socket, data)
+        .await
+        .map_err(TurnError::Io)?;
+    Ok(())
+}
+
+async fn socket_send_inner(socket: &UdpSocket, data: &[u8]) -> Result<usize, std::io::Error> {
+    #[cfg(test)]
+    if let Some(err) = take_forced_error(&FORCE_SEND_ERROR, "forced send error") {
+        return Err(err);
+    }
+    socket.send(data).await
+}
+
+async fn socket_recv(socket: &UdpSocket, buf: &mut [u8]) -> Result<usize, TurnError> {
+    socket_recv_inner(socket, buf).await.map_err(TurnError::Io)
+}
+
+async fn socket_recv_inner(socket: &UdpSocket, buf: &mut [u8]) -> Result<usize, std::io::Error> {
+    #[cfg(test)]
+    if let Some(err) = take_forced_error(&FORCE_RECV_ERROR, "forced recv error") {
+        return Err(err);
+    }
+    socket.recv(buf).await
+}
+
 /// TURN server configuration.
 #[derive(Debug, Clone)]
 pub struct TurnServer {
@@ -136,11 +277,11 @@ pub struct TurnClient {
 impl TurnClient {
     /// Create a new TURN client.
     pub async fn new(server: TurnServer) -> Result<Self, TurnError> {
-        let socket = UdpSocket::bind("0.0.0.0:0").await?;
-        socket.connect(&server.addr).await?;
+        let socket = bind_socket().await?;
+        connect_socket(&socket, server.addr).await?;
         debug!(
             "TURN client bound to {}, connecting to {}",
-            socket.local_addr()?,
+            socket_local_addr(&socket)?,
             server.addr
         );
 
@@ -156,7 +297,7 @@ impl TurnClient {
 
     /// Get the local socket address.
     pub fn local_addr(&self) -> Result<SocketAddr, TurnError> {
-        Ok(self.socket.local_addr()?)
+        socket_local_addr(&self.socket)
     }
 
     /// Get the current allocation, if any.
@@ -175,7 +316,7 @@ impl TurnClient {
 
         // First attempt without credentials to get realm/nonce
         self.transaction_id = generate_transaction_id();
-        let request = self.build_allocate_request(None)?;
+        let request = self.build_allocate_request(None);
 
         match self.send_request(&request).await? {
             AllocateResult::Success(alloc) => {
@@ -193,7 +334,14 @@ impl TurnClient {
                     realm: realm.clone(),
                     nonce: nonce.clone(),
                 };
-                let request = self.build_allocate_request(Some(&auth))?;
+                let request = self.build_allocate_request(Some(&auth));
+
+                #[cfg(test)]
+                if let Some(err) =
+                    take_forced_error(&FORCE_AUTH_SEND_ERROR, "forced auth send error")
+                {
+                    return Err(TurnError::Io(err));
+                }
 
                 match self.send_request(&request).await? {
                     AllocateResult::Success(mut alloc) => {
@@ -228,14 +376,13 @@ impl TurnClient {
         };
 
         self.transaction_id = generate_transaction_id();
-        let request = self.build_refresh_request(lifetime, &auth)?;
+        let request = self.build_refresh_request(lifetime, &auth);
 
         let response = self.send_raw(&request).await?;
         let new_lifetime = self.parse_refresh_response(&response)?;
 
-        if let Some(ref mut alloc) = self.allocation {
-            alloc.lifetime = new_lifetime;
-        }
+        let alloc = self.allocation.as_mut().expect("allocation");
+        alloc.lifetime = new_lifetime;
 
         Ok(new_lifetime)
     }
@@ -256,7 +403,7 @@ impl TurnClient {
         };
 
         self.transaction_id = generate_transaction_id();
-        let request = self.build_permission_request(peer_addr, &auth)?;
+        let request = self.build_permission_request(peer_addr, &auth);
 
         let response = self.send_raw(&request).await?;
         self.parse_permission_response(&response)?;
@@ -278,8 +425,8 @@ impl TurnClient {
             peer_addr
         );
 
-        let indication = self.build_send_indication(peer_addr, data)?;
-        self.socket.send(&indication).await?;
+        let indication = self.build_send_indication(peer_addr, data);
+        socket_send(&self.socket, &indication).await?;
 
         Ok(())
     }
@@ -289,7 +436,7 @@ impl TurnClient {
     /// Returns (peer_addr, data) if a Data indication was received.
     pub async fn recv_data(&self) -> Result<(SocketAddr, Vec<u8>), TurnError> {
         let mut buf = vec![0u8; 65536];
-        let len = self.socket.recv(&mut buf).await?;
+        let len = socket_recv(&self.socket, &mut buf).await?;
         self.parse_data_indication(&buf[..len])
     }
 
@@ -305,7 +452,7 @@ impl TurnClient {
     }
 
     /// Build an Allocate request.
-    fn build_allocate_request(&self, auth: Option<&AuthContext>) -> Result<Bytes, TurnError> {
+    fn build_allocate_request(&self, auth: Option<&AuthContext>) -> Bytes {
         let mut attrs = BytesMut::new();
 
         // REQUESTED-TRANSPORT (UDP)
@@ -349,7 +496,7 @@ impl TurnClient {
             // Add MESSAGE-INTEGRITY with long-term credentials
             add_message_integrity(&mut msg, &auth.username, &auth.realm, &self.server.password);
 
-            return Ok(msg.freeze());
+            return msg.freeze();
         }
 
         let mut msg = BytesMut::with_capacity(20 + attrs.len());
@@ -359,11 +506,11 @@ impl TurnClient {
         msg.put_slice(&self.transaction_id);
         msg.put_slice(&attrs);
 
-        Ok(msg.freeze())
+        msg.freeze()
     }
 
     /// Build a Refresh request.
-    fn build_refresh_request(&self, lifetime: u32, auth: &AuthContext) -> Result<Bytes, TurnError> {
+    fn build_refresh_request(&self, lifetime: u32, auth: &AuthContext) -> Bytes {
         let mut attrs = BytesMut::new();
 
         // LIFETIME
@@ -403,15 +550,11 @@ impl TurnClient {
         // Add MESSAGE-INTEGRITY with long-term credentials
         add_message_integrity(&mut msg, &auth.username, &auth.realm, &self.server.password);
 
-        Ok(msg.freeze())
+        msg.freeze()
     }
 
     /// Build a CreatePermission request.
-    fn build_permission_request(
-        &self,
-        peer_addr: SocketAddr,
-        auth: &AuthContext,
-    ) -> Result<Bytes, TurnError> {
+    fn build_permission_request(&self, peer_addr: SocketAddr, auth: &AuthContext) -> Bytes {
         let mut attrs = BytesMut::new();
 
         // XOR-PEER-ADDRESS
@@ -454,15 +597,11 @@ impl TurnClient {
         // Add MESSAGE-INTEGRITY with long-term credentials
         add_message_integrity(&mut msg, &auth.username, &auth.realm, &self.server.password);
 
-        Ok(msg.freeze())
+        msg.freeze()
     }
 
     /// Build a Send indication.
-    fn build_send_indication(
-        &self,
-        peer_addr: SocketAddr,
-        data: &[u8],
-    ) -> Result<Bytes, TurnError> {
+    fn build_send_indication(&self, peer_addr: SocketAddr, data: &[u8]) -> Bytes {
         let mut attrs = BytesMut::new();
 
         // XOR-PEER-ADDRESS
@@ -486,7 +625,7 @@ impl TurnClient {
         msg.put_slice(&self.transaction_id);
         msg.put_slice(&attrs);
 
-        Ok(msg.freeze())
+        msg.freeze()
     }
 
     /// Send a request and receive a response.
@@ -502,15 +641,15 @@ impl TurnClient {
                 debug!("Retry {} for TURN request", attempt);
             }
 
-            self.socket.send(request).await?;
+            socket_send(&self.socket, request).await?;
 
             let mut buf = vec![0u8; 4096];
-            match timeout(self.timeout, self.socket.recv(&mut buf)).await {
-                Ok(Ok(len)) => {
+            match timeout(self.timeout, socket_recv(&self.socket, &mut buf)).await {
+                Ok(result) => {
+                    let len = result?;
                     trace!("Received {} bytes from TURN server", len);
                     return Ok(buf[..len].to_vec());
                 }
-                Ok(Err(e)) => return Err(TurnError::Io(e)),
                 Err(_) => {
                     if attempt == self.retries - 1 {
                         return Err(TurnError::Timeout);
@@ -1012,6 +1151,43 @@ fn parse_xor_address(data: &[u8], txn_id: &[u8; 12]) -> Option<SocketAddr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Once;
+
+    fn init_tracing() {
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            let _ = tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::TRACE)
+                .with_test_writer()
+                .try_init();
+        });
+    }
+
+    #[test]
+    fn test_normalize_thread_id_branches() {
+        assert_eq!(normalize_thread_id(0), 1);
+        assert_eq!(normalize_thread_id(7), 7);
+    }
+
+    fn assert_turn_err_contains<T>(result: Result<T, TurnError>, needle: &str) {
+        assert!(result.is_err());
+        let err = result.err().unwrap();
+        assert!(format!("{err:?}").contains(needle));
+    }
+
+    fn as_success(result: AllocateResult) -> Option<TurnAllocation> {
+        match result {
+            AllocateResult::Success(alloc) => Some(alloc),
+            _ => None,
+        }
+    }
+
+    fn as_auth_required(result: AllocateResult) -> Option<(String, String)> {
+        match result {
+            AllocateResult::AuthRequired { realm, nonce } => Some((realm, nonce)),
+            _ => None,
+        }
+    }
 
     // TurnError tests
     #[test]
@@ -1401,6 +1577,22 @@ mod tests {
     fn test_message_integrity_too_short() {
         // Message too short to contain a valid header
         let msg = [0u8; 10];
+        assert!(!verify_message_integrity(&msg, "user", "realm", "pass"));
+    }
+
+    #[test]
+    fn test_message_integrity_truncated_attribute() {
+        let mut msg = BytesMut::new();
+        msg.put_u16(ALLOCATE_REQUEST);
+        msg.put_u16(24); // Claims MESSAGE-INTEGRITY present
+        msg.put_u32(MAGIC_COOKIE);
+        msg.put_slice(&[0x55u8; 12]);
+
+        // MESSAGE-INTEGRITY header with insufficient data
+        msg.put_u16(ATTR_MESSAGE_INTEGRITY);
+        msg.put_u16(20);
+        msg.put_slice(&[0u8; 10]); // Truncated HMAC
+
         assert!(!verify_message_integrity(&msg, "user", "realm", "pass"));
     }
 
@@ -1907,23 +2099,17 @@ mod tests {
             nonce: "nonce".to_string(),
         };
         let result = AllocateResult::Success(alloc);
-        match result {
-            AllocateResult::Success(a) => assert_eq!(a.lifetime, 600),
-            _ => panic!("Expected Success"),
-        }
+        let alloc = as_success(result).expect("expected success");
+        assert_eq!(alloc.lifetime, 600);
 
         // Test AuthRequired variant
         let result = AllocateResult::AuthRequired {
             realm: "example.com".to_string(),
             nonce: "abc123".to_string(),
         };
-        match result {
-            AllocateResult::AuthRequired { realm, nonce } => {
-                assert_eq!(realm, "example.com");
-                assert_eq!(nonce, "abc123");
-            }
-            _ => panic!("Expected AuthRequired"),
-        }
+        let (realm, nonce) = as_auth_required(result).expect("expected auth");
+        assert_eq!(realm, "example.com");
+        assert_eq!(nonce, "abc123");
     }
 
     #[test]
@@ -1956,7 +2142,7 @@ mod tests {
             let mut buf = BytesMut::new();
             encode_xor_address(&mut buf, ATTR_XOR_MAPPED_ADDRESS, addr, &txn_id);
             let decoded = parse_xor_address(&buf[4..], &txn_id).unwrap();
-            assert_eq!(decoded, addr, "Failed for {}", addr_str);
+            assert_eq!(decoded, addr);
         }
     }
 
@@ -1977,7 +2163,7 @@ mod tests {
             let mut buf = BytesMut::new();
             encode_xor_address(&mut buf, ATTR_XOR_PEER_ADDRESS, addr, &txn_id);
             let decoded = parse_xor_address(&buf[4..], &txn_id).unwrap();
-            assert_eq!(decoded, addr, "Failed for {}", addr_str);
+            assert_eq!(decoded, addr);
         }
     }
 
@@ -2145,6 +2331,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_turn_client_new() {
+        init_tracing();
         let mock = MockTurnServer::new().await;
         let server = TurnServer::new(mock.addr, "testuser", "testpass");
         let client = TurnClient::new(server).await;
@@ -2154,6 +2341,73 @@ mod tests {
         assert!(client.local_addr().is_ok());
         assert!(client.allocation().is_none());
         assert!(client.relayed_addr().is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_turn_client_new_forced_bind_error() {
+        force_bind_error_once();
+        let server = TurnServer::new("127.0.0.1:3478".parse().unwrap(), "user", "pass");
+        let result = TurnClient::new(server).await;
+        assert_turn_err_contains(result, "Io");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_turn_client_new_forced_connect_error() {
+        force_connect_error_once();
+        let server = TurnServer::new("127.0.0.1:3478".parse().unwrap(), "user", "pass");
+        let result = TurnClient::new(server).await;
+        assert_turn_err_contains(result, "Io");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_turn_client_new_forced_local_addr_error() {
+        force_local_addr_error_once();
+        let server = TurnServer::new("127.0.0.1:3478".parse().unwrap(), "user", "pass");
+        let result = TurnClient::new(server).await;
+        assert_turn_err_contains(result, "Io");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_turn_client_local_addr_forced_error() {
+        let mock = MockTurnServer::new().await;
+        let server = TurnServer::new(mock.addr, "testuser", "testpass");
+        let client = TurnClient::new(server).await.unwrap();
+        force_local_addr_error_once();
+        let result = client.local_addr();
+        assert_turn_err_contains(result, "Io");
+    }
+
+    #[tokio::test]
+    async fn test_turn_client_send_raw_zero_retries_timeout() {
+        let mock = MockTurnServer::new().await;
+        let server = TurnServer::new(mock.addr, "testuser", "testpass");
+        let mut client = TurnClient::new(server).await.unwrap();
+
+        client.retries = 0;
+        let result = client.send_raw(b"").await;
+        assert_turn_err_contains(result, "Timeout");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_turn_client_send_raw_forced_send_error() {
+        let mock = MockTurnServer::new().await;
+        let server = TurnServer::new(mock.addr, "testuser", "testpass");
+        let client = TurnClient::new(server).await.unwrap();
+
+        force_send_error_once();
+        let result = client.send_raw(b"test").await;
+        assert_turn_err_contains(result, "forced send error");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_turn_client_send_raw_forced_recv_error() {
+        let mock = MockTurnServer::new().await;
+        let server = TurnServer::new(mock.addr, "testuser", "testpass");
+        let client = TurnClient::new(server).await.unwrap();
+
+        force_recv_error_once();
+        let result = client.send_raw(b"test").await;
+        assert_turn_err_contains(result, "forced recv error");
     }
 
     #[tokio::test]
@@ -2201,6 +2455,52 @@ mod tests {
         assert!(client.relayed_addr().is_some());
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_turn_client_allocate_auth_send_error() {
+        let mock = MockTurnServer::new().await;
+        let server = TurnServer::new(mock.addr, "testuser", "testpass");
+        let mut client = TurnClient::new(server).await.unwrap();
+
+        let mock_socket = mock.socket;
+        tokio::spawn(async move {
+            let mut buf = [0u8; 4096];
+            let (_, peer) = mock_socket.recv_from(&mut buf).await.unwrap();
+
+            let mut txn_id = [0u8; 12];
+            txn_id.copy_from_slice(&buf[8..20]);
+            let response =
+                MockTurnServer::build_auth_required(&txn_id, "test.realm.com", "nonce123456789");
+            mock_socket.send_to(&response, peer).await.unwrap();
+        });
+
+        force_auth_send_error_once();
+        let result = client.allocate().await;
+        assert_turn_err_contains(result, "forced auth send error");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_turn_client_allocate_auth_send_request_error() {
+        let mock = MockTurnServer::new().await;
+        let server = TurnServer::new(mock.addr, "testuser", "testpass");
+        let mut client = TurnClient::new(server).await.unwrap();
+
+        let mock_socket = mock.socket;
+        tokio::spawn(async move {
+            let mut buf = [0u8; 4096];
+            let (_, peer) = mock_socket.recv_from(&mut buf).await.unwrap();
+
+            let mut txn_id = [0u8; 12];
+            txn_id.copy_from_slice(&buf[8..20]);
+            force_send_error_once();
+            let response =
+                MockTurnServer::build_auth_required(&txn_id, "test.realm.com", "nonce123456789");
+            mock_socket.send_to(&response, peer).await.unwrap();
+        });
+
+        let result = client.allocate().await;
+        assert_turn_err_contains(result, "forced send error");
+    }
+
     #[tokio::test]
     async fn test_turn_client_allocate_direct_success() {
         let mock = MockTurnServer::new().await;
@@ -2229,6 +2529,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_turn_client_refresh() {
+        init_tracing();
         let mock = MockTurnServer::new().await;
         let server = TurnServer::new(mock.addr, "testuser", "testpass");
         let mut client = TurnClient::new(server).await.unwrap();
@@ -2262,6 +2563,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_turn_client_refresh_parse_error() {
+        let mock = MockTurnServer::new().await;
+        let server = TurnServer::new(mock.addr, "testuser", "testpass");
+        let mut client = TurnClient::new(server).await.unwrap();
+
+        client.allocation = Some(TurnAllocation {
+            relayed_addr: "1.2.3.4:5000".parse().unwrap(),
+            mapped_addr: "5.6.7.8:6000".parse().unwrap(),
+            lifetime: 600,
+            realm: "test.realm".to_string(),
+            nonce: "testnonce".to_string(),
+        });
+
+        let mock_socket = mock.socket;
+        tokio::spawn(async move {
+            let mut buf = [0u8; 4096];
+            let (_, peer) = mock_socket.recv_from(&mut buf).await.unwrap();
+            let mut txn_id = [0u8; 12];
+            txn_id.copy_from_slice(&buf[8..20]);
+            let response = MockTurnServer::build_permission_success(&txn_id);
+            mock_socket.send_to(&response, peer).await.unwrap();
+        });
+
+        let result = client.refresh(300).await;
+        assert_turn_err_contains(result, "InvalidResponse");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_turn_client_refresh_send_error() {
+        let mock = MockTurnServer::new().await;
+        let server = TurnServer::new(mock.addr, "testuser", "testpass");
+        let mut client = TurnClient::new(server).await.unwrap();
+
+        client.allocation = Some(TurnAllocation {
+            relayed_addr: "1.2.3.4:5000".parse().unwrap(),
+            mapped_addr: "5.6.7.8:6000".parse().unwrap(),
+            lifetime: 600,
+            realm: "test.realm".to_string(),
+            nonce: "testnonce".to_string(),
+        });
+
+        force_send_error_once();
+        let result = client.refresh(300).await;
+        assert_turn_err_contains(result, "forced send error");
+    }
+
+    #[tokio::test]
     async fn test_turn_client_refresh_not_allocated() {
         let mock = MockTurnServer::new().await;
         let server = TurnServer::new(mock.addr, "testuser", "testpass");
@@ -2269,7 +2617,7 @@ mod tests {
 
         // No allocation set, should fail
         let result = client.refresh(300).await;
-        assert!(matches!(result, Err(TurnError::NotAllocated)));
+        assert_turn_err_contains(result, "NotAllocated");
     }
 
     #[tokio::test]
@@ -2307,6 +2655,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_turn_client_create_permission_parse_error() {
+        let mock = MockTurnServer::new().await;
+        let server = TurnServer::new(mock.addr, "testuser", "testpass");
+        let mut client = TurnClient::new(server).await.unwrap();
+
+        client.allocation = Some(TurnAllocation {
+            relayed_addr: "1.2.3.4:5000".parse().unwrap(),
+            mapped_addr: "5.6.7.8:6000".parse().unwrap(),
+            lifetime: 600,
+            realm: "test.realm".to_string(),
+            nonce: "testnonce".to_string(),
+        });
+
+        let peer_addr: SocketAddr = "10.0.0.100:5060".parse().unwrap();
+
+        let mock_socket = mock.socket;
+        tokio::spawn(async move {
+            let mut buf = [0u8; 4096];
+            let (_, peer) = mock_socket.recv_from(&mut buf).await.unwrap();
+            let mut txn_id = [0u8; 12];
+            txn_id.copy_from_slice(&buf[8..20]);
+            let response = MockTurnServer::build_refresh_success(&txn_id, 300);
+            mock_socket.send_to(&response, peer).await.unwrap();
+        });
+
+        let result = client.create_permission(peer_addr).await;
+        assert_turn_err_contains(result, "InvalidResponse");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_turn_client_create_permission_send_error() {
+        let mock = MockTurnServer::new().await;
+        let server = TurnServer::new(mock.addr, "testuser", "testpass");
+        let mut client = TurnClient::new(server).await.unwrap();
+
+        client.allocation = Some(TurnAllocation {
+            relayed_addr: "1.2.3.4:5000".parse().unwrap(),
+            mapped_addr: "5.6.7.8:6000".parse().unwrap(),
+            lifetime: 600,
+            realm: "test.realm".to_string(),
+            nonce: "testnonce".to_string(),
+        });
+
+        let peer_addr: SocketAddr = "10.0.0.100:5060".parse().unwrap();
+        force_send_error_once();
+        let result = client.create_permission(peer_addr).await;
+        assert_turn_err_contains(result, "forced send error");
+    }
+
+    #[tokio::test]
     async fn test_turn_client_create_permission_not_allocated() {
         let mock = MockTurnServer::new().await;
         let server = TurnServer::new(mock.addr, "testuser", "testpass");
@@ -2314,7 +2712,7 @@ mod tests {
 
         let peer_addr: SocketAddr = "10.0.0.100:5060".parse().unwrap();
         let result = client.create_permission(peer_addr).await;
-        assert!(matches!(result, Err(TurnError::NotAllocated)));
+        assert_turn_err_contains(result, "NotAllocated");
     }
 
     #[tokio::test]
@@ -2326,11 +2724,12 @@ mod tests {
         // No allocation - should fail
         let peer: SocketAddr = "10.0.0.1:5000".parse().unwrap();
         let result = client.send_data(peer, b"test data").await;
-        assert!(matches!(result, Err(TurnError::NotAllocated)));
+        assert_turn_err_contains(result, "NotAllocated");
     }
 
     #[tokio::test]
     async fn test_turn_client_send_data_with_allocation() {
+        init_tracing();
         let mock = MockTurnServer::new().await;
         let server = TurnServer::new(mock.addr, "testuser", "testpass");
         let mut client = TurnClient::new(server).await.unwrap();
@@ -2347,6 +2746,26 @@ mod tests {
         let peer: SocketAddr = "10.0.0.1:5000".parse().unwrap();
         let result = client.send_data(peer, b"test data").await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_turn_client_send_data_forced_send_error() {
+        let mock = MockTurnServer::new().await;
+        let server = TurnServer::new(mock.addr, "testuser", "testpass");
+        let mut client = TurnClient::new(server).await.unwrap();
+
+        client.allocation = Some(TurnAllocation {
+            relayed_addr: "1.2.3.4:5000".parse().unwrap(),
+            mapped_addr: "5.6.7.8:6000".parse().unwrap(),
+            lifetime: 600,
+            realm: "test.realm".to_string(),
+            nonce: "testnonce".to_string(),
+        });
+
+        let peer: SocketAddr = "10.0.0.1:5000".parse().unwrap();
+        force_send_error_once();
+        let result = client.send_data(peer, b"test data").await;
+        assert_turn_err_contains(result, "forced send error");
     }
 
     #[tokio::test]
@@ -2378,6 +2797,17 @@ mod tests {
         assert_eq!(data, test_data);
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_turn_client_recv_data_forced_recv_error() {
+        let mock = MockTurnServer::new().await;
+        let server = TurnServer::new(mock.addr, "testuser", "testpass");
+        let client = TurnClient::new(server).await.unwrap();
+
+        force_recv_error_once();
+        let result = client.recv_data().await;
+        assert_turn_err_contains(result, "forced recv error");
+    }
+
     #[tokio::test]
     async fn test_turn_client_recv_data_timeout() {
         let mock = MockTurnServer::new().await;
@@ -2386,7 +2816,7 @@ mod tests {
 
         // No data sent, should timeout
         let result = client.recv_data_timeout(Duration::from_millis(100)).await;
-        assert!(matches!(result, Err(TurnError::Timeout)));
+        assert_turn_err_contains(result, "Timeout");
     }
 
     #[tokio::test]
@@ -2401,7 +2831,7 @@ mod tests {
         client.retries = 1;
 
         let result = client.allocate().await;
-        assert!(matches!(result, Err(TurnError::Timeout)));
+        assert_turn_err_contains(result, "Timeout");
     }
 
     #[tokio::test]
@@ -2424,10 +2854,7 @@ mod tests {
         });
 
         let result = client.allocate().await;
-        assert!(matches!(
-            result,
-            Err(TurnError::ErrorResponse { code: 403, .. })
-        ));
+        assert_turn_err_contains(result, "403");
     }
 
     #[tokio::test]
@@ -2452,10 +2879,7 @@ mod tests {
         });
 
         let result = client.allocate().await;
-        assert!(matches!(
-            result,
-            Err(TurnError::ErrorResponse { code: 401, .. })
-        ));
+        assert_turn_err_contains(result, "401");
     }
 
     // Direct parse method tests - using async to create real sockets
@@ -2470,12 +2894,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_send_raw_timeout_retries() {
+        let server_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = server_socket.local_addr().unwrap();
+        let server = TurnServer::new(server_addr, "user", "pass");
+        let mut client = TurnClient::new(server).await.unwrap();
+        client.retries = 2;
+        client.timeout = std::time::Duration::from_millis(10);
+
+        let request = vec![0u8; 20];
+        let result = client.send_raw(&request).await;
+        assert_turn_err_contains(result, "Timeout");
+    }
+
+    #[tokio::test]
     async fn test_parse_allocate_response_too_short() {
         let client = create_test_client([0x11; 12]).await;
 
         let short_data = [0u8; 10];
         let result = client.parse_allocate_response(&short_data);
-        assert!(matches!(result, Err(TurnError::InvalidResponse(_))));
+        assert_turn_err_contains(result, "InvalidResponse");
     }
 
     #[tokio::test]
@@ -2490,7 +2928,7 @@ mod tests {
         let client = create_test_client([0x22; 12]).await;
 
         let result = client.parse_allocate_response(&response);
-        assert!(matches!(result, Err(TurnError::InvalidResponse(_))));
+        assert_turn_err_contains(result, "InvalidResponse");
     }
 
     #[tokio::test]
@@ -2507,7 +2945,7 @@ mod tests {
         let client = create_test_client(txn_id).await;
 
         let result = client.parse_allocate_response(&msg);
-        assert!(matches!(result, Err(TurnError::InvalidResponse(_))));
+        assert_turn_err_contains(result, "InvalidResponse");
     }
 
     #[tokio::test]
@@ -2530,7 +2968,171 @@ mod tests {
         let client = create_test_client(txn_id).await;
 
         let result = client.parse_allocate_response(&msg);
-        assert!(matches!(result, Err(TurnError::NoRelayAddress)));
+        assert_turn_err_contains(result, "NoRelayAddress");
+    }
+
+    #[tokio::test]
+    async fn test_parse_allocate_response_ignores_unknown_attr() {
+        let txn_id = [0x11u8; 12];
+        let relayed_addr: SocketAddr = "203.0.113.1:49152".parse().unwrap();
+        let mapped_addr: SocketAddr = "192.0.2.1:54321".parse().unwrap();
+
+        let mut attrs = BytesMut::new();
+        attrs.put_u16(0xFFFF);
+        attrs.put_u16(4);
+        attrs.put_slice(&[1, 2, 3, 4]);
+        encode_xor_address(&mut attrs, ATTR_XOR_RELAYED_ADDRESS, relayed_addr, &txn_id);
+        encode_xor_address(&mut attrs, ATTR_XOR_MAPPED_ADDRESS, mapped_addr, &txn_id);
+
+        let mut msg = BytesMut::new();
+        msg.put_u16(ALLOCATE_RESPONSE);
+        msg.put_u16(attrs.len() as u16);
+        msg.put_u32(MAGIC_COOKIE);
+        msg.put_slice(&txn_id);
+        msg.put_slice(&attrs);
+
+        let client = create_test_client(txn_id).await;
+
+        let result = client.parse_allocate_response(&msg).unwrap();
+        let allocation = as_success(result).expect("expected success");
+        assert_eq!(allocation.relayed_addr, relayed_addr);
+        assert_eq!(allocation.mapped_addr, mapped_addr);
+    }
+
+    #[tokio::test]
+    async fn test_parse_allocate_response_truncated_attr_len() {
+        use bytes::{BufMut, BytesMut};
+
+        let txn_id = [0x11u8; 12];
+        let client = create_test_client(txn_id).await;
+
+        let mut msg = BytesMut::new();
+        msg.put_u16(ALLOCATE_RESPONSE);
+        msg.put_u16(4);
+        msg.put_u32(MAGIC_COOKIE);
+        msg.put_slice(&txn_id);
+        msg.put_u16(ATTR_XOR_RELAYED_ADDRESS);
+        msg.put_u16(8);
+
+        let result = client.parse_allocate_response(&msg);
+        assert_turn_err_contains(result, "NoRelayAddress");
+    }
+
+    #[tokio::test]
+    async fn test_parse_allocate_response_truncated_padding() {
+        use bytes::{BufMut, BytesMut};
+
+        let txn_id = [0x11u8; 12];
+        let relayed_addr: SocketAddr = "203.0.113.1:49152".parse().unwrap();
+        let client = create_test_client(txn_id).await;
+
+        let mut attrs = BytesMut::new();
+        encode_xor_address(&mut attrs, ATTR_XOR_RELAYED_ADDRESS, relayed_addr, &txn_id);
+        attrs.put_u16(ATTR_LIFETIME);
+        attrs.put_u16(1);
+        attrs.put_u8(1);
+
+        let mut msg = BytesMut::new();
+        msg.put_u16(ALLOCATE_RESPONSE);
+        msg.put_u16(attrs.len() as u16);
+        msg.put_u32(MAGIC_COOKIE);
+        msg.put_slice(&txn_id);
+        msg.put_slice(&attrs);
+
+        let result = client.parse_allocate_response(&msg).unwrap();
+        let allocation = as_success(result).expect("Expected success result");
+        assert_eq!(allocation.lifetime, 600);
+        assert!(as_success(AllocateResult::AuthRequired {
+            realm: "realm".to_string(),
+            nonce: "nonce".to_string(),
+        })
+        .is_none());
+    }
+
+    #[tokio::test]
+    async fn test_parse_error_response_short_error_code() {
+        use bytes::{BufMut, BytesMut};
+
+        let client = create_test_client([0x11; 12]).await;
+
+        let mut attrs = BytesMut::new();
+        attrs.put_u16(ATTR_ERROR_CODE);
+        attrs.put_u16(2);
+        attrs.put_u16(0x1234);
+
+        let result = client.parse_error_response(&attrs);
+        assert_turn_err_contains(result, "ErrorResponse");
+    }
+
+    #[tokio::test]
+    async fn test_parse_error_response_auth_required_missing_fields() {
+        use bytes::{BufMut, BytesMut};
+
+        let client = create_test_client([0x11; 12]).await;
+
+        let mut attrs = BytesMut::new();
+        attrs.put_u16(ATTR_ERROR_CODE);
+        attrs.put_u16(4);
+        attrs.put_u16(0);
+        attrs.put_u8(4);
+        attrs.put_u8(1);
+
+        let result = client.parse_error_response(&attrs);
+        assert_turn_err_contains(result, "401");
+    }
+
+    #[tokio::test]
+    async fn test_parse_refresh_response_too_short() {
+        let client = create_test_client([0x11; 12]).await;
+        let data = [0u8; 10];
+        let result = client.parse_refresh_response(&data);
+        assert_turn_err_contains(result, "InvalidResponse");
+    }
+
+    #[tokio::test]
+    async fn test_parse_refresh_response_truncated_padding() {
+        use bytes::{BufMut, BytesMut};
+
+        let txn_id = [0x11u8; 12];
+        let client = create_test_client(txn_id).await;
+
+        let mut attrs = BytesMut::new();
+        attrs.put_u16(ATTR_LIFETIME);
+        attrs.put_u16(1);
+        attrs.put_u8(1);
+
+        let mut msg = BytesMut::new();
+        msg.put_u16(REFRESH_RESPONSE);
+        msg.put_u16(attrs.len() as u16);
+        msg.put_u32(MAGIC_COOKIE);
+        msg.put_slice(&txn_id);
+        msg.put_slice(&attrs);
+
+        let result = client.parse_refresh_response(&msg).unwrap();
+        assert_eq!(result, 600);
+    }
+
+    #[tokio::test]
+    async fn test_parse_data_indication_truncated_padding() {
+        use bytes::{BufMut, BytesMut};
+
+        let txn_id = [0x11u8; 12];
+        let client = create_test_client(txn_id).await;
+
+        let mut attrs = BytesMut::new();
+        attrs.put_u16(ATTR_DATA);
+        attrs.put_u16(1);
+        attrs.put_u8(0xAB);
+
+        let mut msg = BytesMut::new();
+        msg.put_u16(DATA_INDICATION);
+        msg.put_u16(attrs.len() as u16);
+        msg.put_u32(MAGIC_COOKIE);
+        msg.put_slice(&txn_id);
+        msg.put_slice(&attrs);
+
+        let result = client.parse_data_indication(&msg);
+        assert_turn_err_contains(result, "InvalidResponse");
     }
 
     #[tokio::test]
@@ -2546,7 +3148,45 @@ mod tests {
         let client = create_test_client(txn_id).await;
 
         let result = client.parse_refresh_response(&msg);
-        assert!(matches!(result, Err(TurnError::InvalidResponse(_))));
+        assert_turn_err_contains(result, "InvalidResponse");
+    }
+
+    #[tokio::test]
+    async fn test_parse_refresh_response_truncated_attr() {
+        let txn_id = [0x11u8; 12];
+
+        let mut msg = BytesMut::new();
+        msg.put_u16(REFRESH_RESPONSE);
+        msg.put_u16(6); // Attribute header + 2 bytes (truncated)
+        msg.put_u32(MAGIC_COOKIE);
+        msg.put_slice(&txn_id);
+        msg.put_u16(ATTR_LIFETIME);
+        msg.put_u16(4);
+        msg.put_u16(0x1234); // Only 2 bytes of lifetime
+
+        let client = create_test_client(txn_id).await;
+
+        let result = client.parse_refresh_response(&msg).unwrap();
+        assert_eq!(result, 600);
+    }
+
+    #[tokio::test]
+    async fn test_parse_refresh_response_unknown_attr_default() {
+        let txn_id = [0x11u8; 12];
+
+        let mut msg = BytesMut::new();
+        msg.put_u16(REFRESH_RESPONSE);
+        msg.put_u16(8);
+        msg.put_u32(MAGIC_COOKIE);
+        msg.put_slice(&txn_id);
+        msg.put_u16(ATTR_REALM);
+        msg.put_u16(4);
+        msg.put_u32(0x01020304);
+
+        let client = create_test_client(txn_id).await;
+
+        let result = client.parse_refresh_response(&msg).unwrap();
+        assert_eq!(result, 600);
     }
 
     #[tokio::test]
@@ -2562,7 +3202,15 @@ mod tests {
         let client = create_test_client(txn_id).await;
 
         let result = client.parse_permission_response(&msg);
-        assert!(matches!(result, Err(TurnError::InvalidResponse(_))));
+        assert_turn_err_contains(result, "InvalidResponse");
+    }
+
+    #[tokio::test]
+    async fn test_parse_permission_response_too_short() {
+        let client = create_test_client([0x11; 12]).await;
+        let msg = [0u8; 10];
+        let result = client.parse_permission_response(&msg);
+        assert_turn_err_contains(result, "InvalidResponse");
     }
 
     #[tokio::test]
@@ -2583,6 +3231,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_parse_data_indication_ignores_unknown_attr() {
+        let txn_id = [0x11u8; 12];
+        let peer_addr: SocketAddr = "10.0.0.1:5000".parse().unwrap();
+        let data = b"payload";
+
+        let mut attrs = BytesMut::new();
+        attrs.put_u16(0x9999);
+        attrs.put_u16(4);
+        attrs.put_slice(&[1, 2, 3, 4]);
+
+        encode_xor_address(&mut attrs, ATTR_XOR_PEER_ADDRESS, peer_addr, &txn_id);
+
+        attrs.put_u16(ATTR_DATA);
+        attrs.put_u16(data.len() as u16);
+        attrs.put_slice(data);
+        pad_to_4_bytes(&mut attrs, data.len());
+
+        let mut msg = BytesMut::new();
+        msg.put_u16(DATA_INDICATION);
+        msg.put_u16(attrs.len() as u16);
+        msg.put_u32(MAGIC_COOKIE);
+        msg.put_slice(&txn_id);
+        msg.put_slice(&attrs);
+
+        let client = create_test_client(txn_id).await;
+        let result = client.parse_data_indication(&msg).unwrap();
+        assert_eq!(result.0, peer_addr);
+        assert_eq!(result.1, data);
+    }
+
+    #[tokio::test]
+    async fn test_parse_data_indication_too_short() {
+        let client = create_test_client([0x11; 12]).await;
+        let msg = [0u8; 10];
+        let result = client.parse_data_indication(&msg);
+        assert_turn_err_contains(result, "InvalidResponse");
+    }
+
+    #[tokio::test]
+    async fn test_parse_data_indication_truncated_attr() {
+        let txn_id = [0x11u8; 12];
+
+        let mut msg = BytesMut::new();
+        msg.put_u16(DATA_INDICATION);
+        msg.put_u16(6); // Header + 2 bytes
+        msg.put_u32(MAGIC_COOKIE);
+        msg.put_slice(&txn_id);
+        msg.put_u16(ATTR_DATA);
+        msg.put_u16(4);
+        msg.put_u16(0x1234); // Only 2 bytes of data
+
+        let client = create_test_client(txn_id).await;
+        let result = client.parse_data_indication(&msg);
+        assert_turn_err_contains(result, "InvalidResponse");
+    }
+
+    #[tokio::test]
     async fn test_parse_data_indication_wrong_type() {
         let txn_id = [0x11u8; 12];
 
@@ -2595,7 +3300,7 @@ mod tests {
         let client = create_test_client(txn_id).await;
 
         let result = client.parse_data_indication(&msg);
-        assert!(matches!(result, Err(TurnError::InvalidResponse(_))));
+        assert_turn_err_contains(result, "InvalidResponse");
     }
 
     #[tokio::test]
@@ -2617,7 +3322,7 @@ mod tests {
         let client = create_test_client(txn_id).await;
 
         let result = client.parse_data_indication(&msg);
-        assert!(matches!(result, Err(TurnError::InvalidResponse(_))));
+        assert_turn_err_contains(result, "InvalidResponse");
     }
 
     #[tokio::test]
@@ -2629,9 +3334,40 @@ mod tests {
 
         // Skip header and get just the attrs
         let result = client.parse_error_response(&response[20..]);
-        assert!(matches!(
-            result,
-            Err(TurnError::ErrorResponse { code: 500, .. })
-        ));
+        assert_turn_err_contains(result, "500");
+    }
+
+    #[tokio::test]
+    async fn test_parse_error_response_auth_required() {
+        let txn_id = [0x11u8; 12];
+        let response = MockTurnServer::build_auth_required(&txn_id, "realm", "nonce");
+
+        let client = create_test_client(txn_id).await;
+
+        let result = client.parse_error_response(&response[20..]).unwrap();
+        let (realm, nonce) = as_auth_required(result).expect("Expected auth required result");
+        assert_eq!(realm, "realm");
+        assert_eq!(nonce, "nonce");
+        assert!(as_auth_required(AllocateResult::Success(TurnAllocation {
+            relayed_addr: "203.0.113.1:49152".parse().unwrap(),
+            mapped_addr: "192.0.2.1:49152".parse().unwrap(),
+            lifetime: 600,
+            realm: "realm".to_string(),
+            nonce: "nonce".to_string(),
+        }))
+        .is_none());
+    }
+
+    #[tokio::test]
+    async fn test_parse_error_response_truncated_attr() {
+        let client = create_test_client([0x11; 12]).await;
+
+        let mut attrs = BytesMut::new();
+        attrs.put_u16(ATTR_ERROR_CODE);
+        attrs.put_u16(10); // Claims 10 bytes, but not enough data follows
+        attrs.put_u8(0x00);
+
+        let result = client.parse_error_response(&attrs);
+        assert_turn_err_contains(result, "code: 0");
     }
 }

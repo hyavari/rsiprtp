@@ -423,6 +423,12 @@ mod tests {
         }
     }
 
+    fn invalid_config() -> RegistrationConfig {
+        let mut config = test_config();
+        config.registrar = "sip:registrar@[::1".to_string();
+        config
+    }
+
     // RegistrationError tests
     #[test]
     fn test_registration_error_auth() {
@@ -571,6 +577,47 @@ mod tests {
     }
 
     #[test]
+    fn test_create_register_invalid_registrar() {
+        let mut manager = RegistrationManager::new(invalid_config());
+        let err = manager.create_register().unwrap_err();
+        assert!(err.to_string().contains("request error"));
+    }
+
+    #[test]
+    fn test_create_register_with_auth_success() {
+        let mut manager = RegistrationManager::new(test_config());
+        let challenge = DigestChallenge::parse("Digest realm=\"test\", nonce=\"abc\"").unwrap();
+        let request = manager.create_register_with_auth(&challenge).unwrap();
+        let bytes = request.to_bytes();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("Authorization: Digest"));
+    }
+
+    #[test]
+    fn test_create_register_with_auth_invalid_registrar() {
+        let mut manager = RegistrationManager::new(invalid_config());
+        let challenge = DigestChallenge::parse("Digest realm=\"test\", nonce=\"abc\"").unwrap();
+        let err = manager.create_register_with_auth(&challenge).unwrap_err();
+        assert!(err.to_string().contains("request error"));
+    }
+
+    #[test]
+    fn test_create_register_with_auth_invalid_challenge() {
+        let mut manager = RegistrationManager::new(test_config());
+        let challenge = DigestChallenge {
+            realm: String::new(),
+            nonce: "abc".to_string(),
+            opaque: None,
+            stale: false,
+            algorithm: mdsiprtp_sip::Algorithm::Md5,
+            qop: None,
+            domain: None,
+        };
+        let err = manager.create_register_with_auth(&challenge).unwrap_err();
+        assert!(err.to_string().contains("authentication error"));
+    }
+
+    #[test]
     fn test_create_register_refresh() {
         let mut manager = RegistrationManager::new(test_config());
 
@@ -626,6 +673,49 @@ mod tests {
 
         assert!(msg.contains("Expires: 0"));
         assert!(msg.contains("Authorization"));
+    }
+
+    #[test]
+    fn test_create_unregister_with_last_challenge() {
+        let mut manager = RegistrationManager::new(test_config());
+        manager.last_challenge =
+            Some(DigestChallenge::parse("Digest realm=\"test\", nonce=\"abc\"").unwrap());
+        let request = manager.create_unregister().unwrap();
+        let bytes = request.to_bytes();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("Authorization: Digest"));
+    }
+
+    #[test]
+    fn test_create_unregister_with_invalid_challenge() {
+        let mut manager = RegistrationManager::new(test_config());
+        manager.last_challenge = Some(DigestChallenge {
+            realm: String::new(),
+            nonce: "abc".to_string(),
+            opaque: None,
+            stale: false,
+            algorithm: mdsiprtp_sip::Algorithm::Md5,
+            qop: None,
+            domain: None,
+        });
+        let err = manager.create_unregister().unwrap_err();
+        assert!(err.to_string().contains("authentication error"));
+    }
+
+    #[test]
+    fn test_create_unregister_with_auth_invalid_registrar() {
+        let mut manager = RegistrationManager::new(invalid_config());
+        manager.last_challenge =
+            Some(DigestChallenge::parse("Digest realm=\"test\", nonce=\"abc\"").unwrap());
+        let err = manager.create_unregister().unwrap_err();
+        assert!(err.to_string().contains("request error"));
+    }
+
+    #[test]
+    fn test_create_unregister_invalid_registrar() {
+        let mut manager = RegistrationManager::new(invalid_config());
+        let err = manager.create_unregister().unwrap_err();
+        assert!(err.to_string().contains("request error"));
     }
 
     #[test]
@@ -701,7 +791,7 @@ Content-Length: 0\r\n\
         let response = msg.as_response().unwrap();
 
         let result = manager.handle_response(response);
-        assert!(result.is_ok(), "handle_response failed: {:?}", result.err());
+        assert!(result.is_ok());
         let retry = result.unwrap();
         assert!(retry.is_some()); // Should retry with auth
 
@@ -712,6 +802,56 @@ Content-Length: 0\r\n\
         assert!(msg.contains("Authorization: Digest"));
         assert!(msg.contains("username=\"alice\""));
         assert!(msg.contains("realm=\"asterisk\""));
+    }
+
+    #[test]
+    fn test_handle_401_invalid_challenge() {
+        let mut manager = RegistrationManager::new(test_config());
+        manager.create_register().unwrap();
+
+        let response_bytes = b"SIP/2.0 401 Unauthorized\r\n\
+Via: SIP/2.0/UDP 192.168.1.100:5060;branch=z9hG4bKtest\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+To: <sip:alice@example.com>;tag=totag\r\n\
+Call-ID: test@192.168.1.100\r\n\
+CSeq: 1 REGISTER\r\n\
+WWW-Authenticate: Digest realm=\"asterisk\"\r\n\
+Content-Length: 0\r\n\
+\r\n";
+
+        let msg = mdsiprtp_sip::SipMessage::parse(response_bytes).unwrap();
+        let response = msg.as_response().unwrap();
+
+        let result = manager.handle_response(response);
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("authentication error"));
+    }
+
+    #[test]
+    fn test_handle_401_empty_realm() {
+        let mut manager = RegistrationManager::new(test_config());
+        manager.create_register().unwrap();
+
+        let response_bytes = b"SIP/2.0 401 Unauthorized\r\n\
+Via: SIP/2.0/UDP 192.168.1.100:5060;branch=z9hG4bKtest\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+To: <sip:alice@example.com>;tag=totag\r\n\
+Call-ID: test@192.168.1.100\r\n\
+CSeq: 1 REGISTER\r\n\
+WWW-Authenticate: Digest realm=\"\", nonce=\"abc123\"\r\n\
+Content-Length: 0\r\n\
+\r\n";
+
+        let msg = mdsiprtp_sip::SipMessage::parse(response_bytes).unwrap();
+        let response = msg.as_response().unwrap();
+
+        let result = manager.handle_response(response);
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("authentication error"));
     }
 
     #[test]
@@ -765,6 +905,78 @@ Content-Length: 0\r\n\
         let msg = String::from_utf8_lossy(&bytes);
 
         assert!(msg.contains("Proxy-Authorization"));
+    }
+
+    #[test]
+    fn test_handle_407_invalid_challenge() {
+        let mut manager = RegistrationManager::new(test_config());
+        manager.create_register().unwrap();
+
+        let response_bytes = b"SIP/2.0 407 Proxy Authentication Required\r\n\
+Via: SIP/2.0/UDP 192.168.1.100:5060;branch=z9hG4bKtest\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+To: <sip:alice@example.com>;tag=totag\r\n\
+Call-ID: test@192.168.1.100\r\n\
+CSeq: 1 REGISTER\r\n\
+Proxy-Authenticate: Digest realm=\"proxy\"\r\n\
+Content-Length: 0\r\n\
+\r\n";
+
+        let msg = mdsiprtp_sip::SipMessage::parse(response_bytes).unwrap();
+        let response = msg.as_response().unwrap();
+
+        let result = manager.handle_response(response);
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("authentication error"));
+    }
+
+    #[test]
+    fn test_handle_407_empty_realm() {
+        let mut manager = RegistrationManager::new(test_config());
+        manager.create_register().unwrap();
+
+        let response_bytes = b"SIP/2.0 407 Proxy Authentication Required\r\n\
+Via: SIP/2.0/UDP 192.168.1.100:5060;branch=z9hG4bKtest\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+To: <sip:alice@example.com>;tag=totag\r\n\
+Call-ID: test@192.168.1.100\r\n\
+CSeq: 1 REGISTER\r\n\
+Proxy-Authenticate: Digest realm=\"\", nonce=\"xyz789\"\r\n\
+Content-Length: 0\r\n\
+\r\n";
+
+        let msg = mdsiprtp_sip::SipMessage::parse(response_bytes).unwrap();
+        let response = msg.as_response().unwrap();
+
+        let result = manager.handle_response(response);
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("authentication error"));
+    }
+
+    #[test]
+    fn test_handle_407_invalid_registrar() {
+        let mut manager = RegistrationManager::new(invalid_config());
+        manager.create_register().unwrap_err();
+
+        let response_bytes = b"SIP/2.0 407 Proxy Authentication Required\r\n\
+Via: SIP/2.0/UDP 192.168.1.100:5060;branch=z9hG4bKtest\r\n\
+From: <sip:alice@example.com>;tag=fromtag\r\n\
+To: <sip:alice@example.com>;tag=totag\r\n\
+Call-ID: test@192.168.1.100\r\n\
+CSeq: 1 REGISTER\r\n\
+Proxy-Authenticate: Digest realm=\"proxy\", nonce=\"xyz789\"\r\n\
+Content-Length: 0\r\n\
+\r\n";
+
+        let msg = mdsiprtp_sip::SipMessage::parse(response_bytes).unwrap();
+        let response = msg.as_response().unwrap();
+
+        let result = manager.handle_response(response);
+        assert!(result.unwrap_err().to_string().contains("request error"));
     }
 
     #[test]

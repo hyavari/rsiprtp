@@ -435,6 +435,23 @@ mod tests {
         rtp
     }
 
+    fn make_test_rtp_with_seq(seq: u16) -> Vec<u8> {
+        let mut rtp = make_test_rtp();
+        let [hi, lo] = seq.to_be_bytes();
+        rtp[2] = hi;
+        rtp[3] = lo;
+        rtp
+    }
+
+    #[test]
+    fn test_context_new_invalid_lengths() {
+        let bad_key = [0u8; 8];
+        let bad_salt = [0u8; 8];
+
+        let _ = SrtpContext::new(CryptoSuite::AesCm128HmacSha1_80, &bad_key, &bad_salt);
+        let _ = SrtcpContext::new(CryptoSuite::AesCm128HmacSha1_80, &bad_key, &bad_salt);
+    }
+
     #[test]
     fn test_srtp_protect_unprotect() {
         let master_key = [0u8; 16];
@@ -459,6 +476,20 @@ mod tests {
 
         // Should match original
         assert_eq!(&decrypted[..], &rtp[..]);
+    }
+
+    #[test]
+    fn test_srtp_protect_extension_too_short() {
+        let master_key = [0u8; 16];
+        let master_salt = [0u8; 14];
+
+        let mut ctx =
+            SrtpContext::new(CryptoSuite::AesCm128HmacSha1_80, &master_key, &master_salt).unwrap();
+        let mut rtp = make_test_rtp();
+        rtp[0] |= 0x10;
+        rtp.truncate(12);
+
+        let _ = ctx.protect(&rtp);
     }
 
     #[test]
@@ -591,6 +622,12 @@ mod tests {
     }
 
     #[test]
+    fn test_estimate_roc_no_wrap_large_seq_gap() {
+        // s_l >= 0x8000, seq < s_l, difference <= 0x8000 (no wrap)
+        assert_eq!(estimate_roc(7, 0x9000, 0x8800), 7);
+    }
+
+    #[test]
     fn test_get_rtp_header_len_with_csrc() {
         // RTP with 2 CSRC entries (CC=2)
         let mut rtp = vec![0x82, 0x00, 0x00, 0x01]; // Version 2, CC=2
@@ -692,5 +729,164 @@ mod tests {
 
         // Should fail auth
         assert!(ctx2.unprotect(&tampered).is_err());
+    }
+
+    #[test]
+    fn test_srtp_unprotect_updates_receiver_state() {
+        let master_key = [0u8; 16];
+        let master_salt = [0u8; 14];
+
+        let mut ctx_send =
+            SrtpContext::new(CryptoSuite::AesCm128HmacSha1_80, &master_key, &master_salt).unwrap();
+        let mut ctx_recv =
+            SrtpContext::new(CryptoSuite::AesCm128HmacSha1_80, &master_key, &master_salt).unwrap();
+
+        let rtp_seq_10 = make_test_rtp_with_seq(10);
+        let rtp_seq_11 = make_test_rtp_with_seq(11);
+
+        let srtp_10 = ctx_send.protect(&rtp_seq_10).unwrap();
+        let srtp_11 = ctx_send.protect(&rtp_seq_11).unwrap();
+
+        ctx_recv.unprotect(&srtp_10).unwrap();
+        let highest_before = ctx_recv.highest_seq;
+        ctx_recv.unprotect(&srtp_11).unwrap();
+
+        assert!(ctx_recv.highest_seq > highest_before);
+    }
+
+    #[test]
+    fn test_get_rtp_header_len_too_short() {
+        let result = get_rtp_header_len(&[0u8; 4]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_estimate_roc_wraparound_forward() {
+        let roc = estimate_roc(3, 0x9000, 0x0001);
+        assert_eq!(roc, 4);
+    }
+
+    #[test]
+    fn test_estimate_roc_wraparound_forward_large_gap() {
+        let roc = estimate_roc(1, 0x9001, 0x0001);
+        assert_eq!(roc, 2);
+    }
+
+    #[test]
+    fn test_srtcp_auth_failure() {
+        let master_key = [0u8; 16];
+        let master_salt = [0u8; 14];
+
+        let mut ctx_send =
+            SrtcpContext::new(CryptoSuite::AesCm128HmacSha1_80, &master_key, &master_salt).unwrap();
+        let mut ctx_recv =
+            SrtcpContext::new(CryptoSuite::AesCm128HmacSha1_80, &master_key, &master_salt).unwrap();
+
+        let rtcp = vec![
+            0x80, 0xC8, 0x00, 0x06, 0x12, 0x34, 0x56, 0x78, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+
+        let srtcp = ctx_send.protect(&rtcp).unwrap();
+        let mut tampered = srtcp.to_vec();
+        let last = tampered.len() - 1;
+        tampered[last] ^= 0xFF;
+
+        assert!(ctx_recv.unprotect(&tampered).is_err());
+    }
+
+    #[test]
+    fn test_srtp_sender_roc_wraparound() {
+        let master_key = [0u8; 16];
+        let master_salt = [0u8; 14];
+
+        let mut ctx =
+            SrtpContext::new(CryptoSuite::AesCm128HmacSha1_80, &master_key, &master_salt).unwrap();
+
+        let high_seq = make_test_rtp_with_seq(0xFFFF);
+        ctx.protect(&high_seq).unwrap();
+        assert_eq!(ctx.sender_roc, 0);
+
+        let low_seq = make_test_rtp_with_seq(0x0001);
+        ctx.protect(&low_seq).unwrap();
+        assert_eq!(ctx.sender_roc, 1);
+        assert_eq!(ctx.highest_seq, 0x0001);
+    }
+
+    #[test]
+    fn test_srtp_unprotect_out_of_order_does_not_rewind() {
+        let master_key = [0u8; 16];
+        let master_salt = [0u8; 14];
+
+        let mut ctx_send =
+            SrtpContext::new(CryptoSuite::AesCm128HmacSha1_80, &master_key, &master_salt).unwrap();
+        let mut ctx_recv =
+            SrtpContext::new(CryptoSuite::AesCm128HmacSha1_80, &master_key, &master_salt).unwrap();
+
+        let rtp_seq_10 = make_test_rtp_with_seq(10);
+        let rtp_seq_11 = make_test_rtp_with_seq(11);
+
+        let srtp_10 = ctx_send.protect(&rtp_seq_10).unwrap();
+        let srtp_11 = ctx_send.protect(&rtp_seq_11).unwrap();
+
+        ctx_recv.unprotect(&srtp_11).unwrap();
+        let highest_after_11 = ctx_recv.highest_seq;
+
+        ctx_recv.unprotect(&srtp_10).unwrap();
+        assert_eq!(ctx_recv.highest_seq, highest_after_11);
+    }
+
+    #[test]
+    fn test_srtp_unprotect_header_len_error_after_auth() {
+        let master_key = [0u8; 16];
+        let master_salt = [0u8; 14];
+
+        let mut ctx =
+            SrtpContext::new(CryptoSuite::AesCm128HmacSha1_80, &master_key, &master_salt).unwrap();
+
+        // Extension bit set with extension length that exceeds packet size.
+        let mut rtp = vec![0u8; 16];
+        rtp[0] = 0x90; // V=2, X=1, CC=0
+        rtp[1] = 0x00;
+        rtp[2] = 0x00;
+        rtp[3] = 0x01;
+        rtp[8] = 0x12;
+        rtp[9] = 0x34;
+        rtp[10] = 0x56;
+        rtp[11] = 0x78;
+        rtp[14] = 0x00;
+        rtp[15] = 0x02; // Extension length = 2 (8 bytes), but data missing.
+
+        let tag = ctx.compute_auth_tag(&rtp, 0);
+        let mut srtp = rtp.clone();
+        srtp.extend_from_slice(&tag[..ctx.suite.auth_tag_len()]);
+
+        let result = ctx.unprotect(&srtp);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_srtcp_unprotect_without_encryption() {
+        let master_key = [0u8; 16];
+        let master_salt = [0u8; 14];
+
+        let mut ctx =
+            SrtcpContext::new(CryptoSuite::AesCm128HmacSha1_80, &master_key, &master_salt).unwrap();
+
+        let rtcp = vec![
+            0x80, 0xC8, 0x00, 0x06, 0x12, 0x34, 0x56, 0x78, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+
+        let srtcp_index = 0u32;
+        let mut packet_with_index = rtcp.clone();
+        packet_with_index.extend_from_slice(&srtcp_index.to_be_bytes());
+
+        let tag = ctx.compute_auth_tag(&packet_with_index);
+        let mut srtcp = packet_with_index.clone();
+        srtcp.extend_from_slice(&tag[..ctx.suite.auth_tag_len()]);
+
+        let decrypted = ctx.unprotect(&srtcp).unwrap();
+        assert_eq!(&decrypted[..], &rtcp[..]);
     }
 }
