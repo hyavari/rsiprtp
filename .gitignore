@@ -1,3 +1,6 @@
 target/
 crates/gabby/models/
 crates/gabby/vendor/vosk/
+
+# Code concatenation dumps (may contain embedded test keys)
+*-COMBINED.TXT

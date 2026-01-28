@@ -727,26 +727,31 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr};
 
     static CRYPTO_INIT: Once = Once::new();
-    const PKCS1_KEY_PEM: &str = "-----BEGIN RSA PRIVATE KEY-----\n\
-***REDACTED***\n\
-***REDACTED***\n\
-***REDACTED***\n\
-***REDACTED***\n\
-***REDACTED***\n\
-***REDACTED***\n\
-***REDACTED***\n\
-***REDACTED***\n\
-***REDACTED***\n\
-***REDACTED***\n\
-***REDACTED***\n\
-***REDACTED***\n\
-***REDACTED***\n\
------END RSA PRIVATE KEY-----\n";
-    const SEC1_KEY_PEM: &str = "-----BEGIN EC PRIVATE KEY-----\n\
-***REDACTED***\n\
-***REDACTED***\n\
-***REDACTED***\n\
------END EC PRIVATE KEY-----\n";
+
+    /// Generate an RSA private key in PKCS#1 PEM format for testing
+    fn generate_pkcs1_key_pem() -> String {
+        use rsa::pkcs1::EncodeRsaPrivateKey;
+        use rsa::RsaPrivateKey;
+
+        let mut rng = rand::thread_rng();
+        let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+        private_key
+            .to_pkcs1_pem(rsa::pkcs1::LineEnding::LF)
+            .unwrap()
+            .to_string()
+    }
+
+    /// Generate an EC private key in SEC1 PEM format for testing
+    fn generate_sec1_key_pem() -> String {
+        use p256::SecretKey;
+
+        let secret_key = SecretKey::random(&mut rand::thread_rng());
+        // SEC1 format is the traditional EC private key format
+        secret_key
+            .to_sec1_pem(p256::pkcs8::LineEnding::LF)
+            .unwrap()
+            .to_string()
+    }
 
     /// Install the ring crypto provider for tests.
     fn init_crypto_provider() {
@@ -1212,8 +1217,9 @@ mod tests {
         use std::io::Write;
         use tempfile::NamedTempFile;
 
+        let pkcs1_pem = generate_pkcs1_key_pem();
         let mut key_file = NamedTempFile::new().unwrap();
-        key_file.write_all(PKCS1_KEY_PEM.as_bytes()).unwrap();
+        key_file.write_all(pkcs1_pem.as_bytes()).unwrap();
         key_file.flush().unwrap();
 
         let key = load_private_key(key_file.path()).unwrap();
@@ -1225,8 +1231,9 @@ mod tests {
         use std::io::Write;
         use tempfile::NamedTempFile;
 
+        let sec1_pem = generate_sec1_key_pem();
         let mut key_file = NamedTempFile::new().unwrap();
-        key_file.write_all(SEC1_KEY_PEM.as_bytes()).unwrap();
+        key_file.write_all(sec1_pem.as_bytes()).unwrap();
         key_file.flush().unwrap();
 
         let key = load_private_key(key_file.path()).unwrap();
