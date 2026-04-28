@@ -2392,7 +2392,6 @@ v=0\r\ntest";
         let msg = SipMessage::parse(msg_with_body).unwrap();
         let req = msg.as_request().unwrap();
         assert!(!req.body().is_empty());
-        assert!(req.body().len() > 0);
     }
 
     // Response error handling tests

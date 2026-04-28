@@ -61,10 +61,7 @@ fn take_forced_send_error(dest: SocketAddr) -> Option<std::io::Error> {
     let mut guard = FORCE_SEND_ERROR_DEST.lock().unwrap();
     if guard.as_ref() == Some(&dest) {
         *guard = None;
-        Some(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "forced send error",
-        ))
+        Some(std::io::Error::other("forced send error"))
     } else {
         None
     }
@@ -73,7 +70,7 @@ fn take_forced_send_error(dest: SocketAddr) -> Option<std::io::Error> {
 #[cfg(test)]
 fn take_forced_error(flag: &AtomicBool, message: &str) -> Option<std::io::Error> {
     if flag.swap(false, Ordering::SeqCst) {
-        Some(std::io::Error::new(std::io::ErrorKind::Other, message))
+        Some(std::io::Error::other(message))
     } else {
         None
     }
@@ -190,10 +187,7 @@ impl UdpTransport {
                     #[cfg(test)]
                     {
                         if FORCE_RECV_ERROR.swap(false, Ordering::SeqCst) {
-                            return Err(std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                "forced recv error",
-                            ));
+                            return Err(std::io::Error::other("forced recv error"));
                         }
                     }
                     recv_socket.recv_from(&mut buf).await

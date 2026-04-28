@@ -651,7 +651,7 @@ mod tests {
         let has_fmtp = media
             .attributes
             .iter()
-            .any(|a| a.name == "fmtp" && a.value.as_ref().map_or(false, |v| v.contains("0-16")));
+            .any(|a| a.name == "fmtp" && a.value.as_ref().is_some_and(|v| v.contains("0-16")));
         assert!(has_fmtp);
     }
 
@@ -694,10 +694,7 @@ mod tests {
             .build();
 
         let has_fmtp = media.attributes.iter().any(|a| {
-            a.name == "fmtp"
-                && a.value
-                    .as_ref()
-                    .map_or(false, |v| v.contains("useinbandfec"))
+            a.name == "fmtp" && a.value.as_ref().is_some_and(|v| v.contains("useinbandfec"))
         });
         assert!(has_fmtp);
     }

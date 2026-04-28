@@ -277,8 +277,6 @@ async fn test_outbound_call_to_echo() {
 
     // Wait for response (could be 100, 180, 401, 200, etc.)
     let mut cseq = 1;
-    let mut received_100 = false;
-    let mut received_18x = false;
     let mut authenticated = false;
 
     loop {
@@ -298,11 +296,9 @@ async fn test_outbound_call_to_echo() {
 
         match response.status_code() {
             100 => {
-                received_100 = true;
                 continue; // Wait for next response
             }
             180 | 183 => {
-                received_18x = true;
                 continue; // Wait for final response
             }
             200 => {
@@ -482,11 +478,8 @@ async fn test_outbound_call_to_echo() {
         }
     }
 
-    // Test passes if we got here
-    assert!(
-        received_100 || received_18x || true,
-        "Should have received some response"
-    );
+    // Loop only exits on the 200-OK / ACK / BYE / 200-OK-to-BYE happy path,
+    // so reaching here means the call cycle completed successfully.
 }
 
 /// Test making an OPTIONS request to Asterisk

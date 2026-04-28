@@ -490,6 +490,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::clone_on_copy)] // exercise derived Clone for coverage
     fn test_dtmf_digit_clone() {
         let digit = DtmfDigit::Five;
         let cloned = digit.clone();

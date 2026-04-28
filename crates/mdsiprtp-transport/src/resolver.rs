@@ -597,7 +597,7 @@ mod tests {
                     result = async {
                         if simulate_recv_error {
                             simulate_recv_error = false;
-                            Err(std::io::Error::new(std::io::ErrorKind::Other, "simulated recv error"))
+                            Err(std::io::Error::other("simulated recv error"))
                         } else {
                             socket.recv_from(&mut buf).await
                         }
@@ -801,7 +801,7 @@ mod tests {
     #[test]
     fn test_transport_protocol_priority() {
         // TLS should be preferred over TCP over UDP
-        let transports = vec![
+        let transports = [
             TransportProtocol::Tls,
             TransportProtocol::Tcp,
             TransportProtocol::Udp,
@@ -1083,7 +1083,7 @@ mod tests {
     #[test]
     fn test_srv_sorting_by_priority() {
         // Create targets with different priorities
-        let mut targets = vec![
+        let mut targets = [
             ResolvedTarget {
                 host: "low-priority.example.com".to_string(),
                 port: 5060,
@@ -1123,7 +1123,7 @@ mod tests {
     #[test]
     fn test_srv_sorting_by_weight_when_priority_equal() {
         // Create targets with same priority but different weights
-        let mut targets = vec![
+        let mut targets = [
             ResolvedTarget {
                 host: "low-weight.example.com".to_string(),
                 port: 5060,
@@ -1162,7 +1162,7 @@ mod tests {
 
     #[test]
     fn test_srv_sorting_combined_priority_and_weight() {
-        let mut targets = vec![
+        let mut targets = [
             ResolvedTarget {
                 host: "server1.example.com".to_string(),
                 port: 5060,
@@ -1213,7 +1213,7 @@ mod tests {
 
     #[test]
     fn test_srv_sorting_zero_weight() {
-        let mut targets = vec![
+        let mut targets = [
             ResolvedTarget {
                 host: "zero-weight.example.com".to_string(),
                 port: 5060,
@@ -1241,7 +1241,7 @@ mod tests {
 
     #[test]
     fn test_srv_sorting_max_values() {
-        let mut targets = vec![
+        let mut targets = [
             ResolvedTarget {
                 host: "max-priority.example.com".to_string(),
                 port: 5060,
@@ -1269,7 +1269,7 @@ mod tests {
     // NAPTR sorting tests - test order and preference sorting logic
     #[test]
     fn test_naptr_sorting_by_order() {
-        let mut services = vec![
+        let mut services = [
             (
                 30u16,
                 50u16,
@@ -1302,7 +1302,7 @@ mod tests {
 
     #[test]
     fn test_naptr_sorting_by_preference_when_order_equal() {
-        let mut services = vec![
+        let mut services = [
             (
                 10u16,
                 100u16,
@@ -1334,7 +1334,7 @@ mod tests {
 
     #[test]
     fn test_naptr_sorting_combined_order_and_preference() {
-        let mut services = vec![
+        let mut services = [
             (
                 20u16,
                 50u16,
@@ -1431,7 +1431,7 @@ mod tests {
         let a_record = Record::from_rdata(name.clone(), 60, RData::A(A::new(127, 0, 0, 1)));
         let empty_record = Record::with(name, RecordType::A, 60);
 
-        let services = collect_naptr_records(vec![naptr_record, a_record, empty_record].iter());
+        let services = collect_naptr_records([naptr_record, a_record, empty_record].iter());
         assert_eq!(services.len(), 1);
         assert_eq!(services[0].0.trim_end_matches('.'), "_sip._udp.example.com");
         assert_eq!(services[0].1, TransportProtocol::Udp);
@@ -2388,7 +2388,7 @@ mod tests {
             let target = ResolvedTarget {
                 host: "test.com".to_string(),
                 port: 5060,
-                transport: transport.clone(),
+                transport,
                 priority: 0,
                 weight: 0,
                 addresses: vec![],

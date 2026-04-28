@@ -139,33 +139,30 @@ impl VoicemailServer {
             None => return,
         };
 
-        match call.state {
-            VoicemailState::Recording => {
-                // Check for silence
-                let is_silent = is_silence(samples, self.config.silence_threshold);
+        if call.state == VoicemailState::Recording {
+            // Check for silence
+            let is_silent = is_silence(samples, self.config.silence_threshold);
 
-                if is_silent {
-                    call.silence_duration += Duration::from_millis(20); // Assuming 20ms frames
+            if is_silent {
+                call.silence_duration += Duration::from_millis(20); // Assuming 20ms frames
 
-                    if call.silence_duration.as_secs() >= self.config.silence_duration_secs as u64 {
-                        println!("Silence detected, ending recording for {}", call_id);
-                        call.state = VoicemailState::Ending;
-                    }
-                } else {
-                    call.silence_duration = Duration::ZERO;
+                if call.silence_duration.as_secs() >= self.config.silence_duration_secs as u64 {
+                    println!("Silence detected, ending recording for {}", call_id);
+                    call.state = VoicemailState::Ending;
                 }
-
-                // Check max duration
-                if let Some(start) = call.record_start {
-                    if start.elapsed().as_secs() >= self.config.max_record_duration as u64 {
-                        println!("Max duration reached for {}", call_id);
-                        call.state = VoicemailState::Ending;
-                    }
-                }
-
-                // In real implementation: write samples to WAV file
+            } else {
+                call.silence_duration = Duration::ZERO;
             }
-            _ => {}
+
+            // Check max duration
+            if let Some(start) = call.record_start {
+                if start.elapsed().as_secs() >= self.config.max_record_duration as u64 {
+                    println!("Max duration reached for {}", call_id);
+                    call.state = VoicemailState::Ending;
+                }
+            }
+
+            // In real implementation: write samples to WAV file
         }
 
         call.last_audio = Instant::now();

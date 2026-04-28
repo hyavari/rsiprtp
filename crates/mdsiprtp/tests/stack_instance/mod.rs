@@ -267,17 +267,14 @@ impl StackInstance {
     pub async fn step(&mut self) -> Option<StackEvent> {
         // Check for incoming SIP messages (non-blocking)
         let mut buf = vec![0u8; 65535];
-        match tokio::time::timeout(
+        if let Ok(Ok((len, source))) = tokio::time::timeout(
             Duration::from_millis(1),
             self.sip_socket.recv_from(&mut buf),
         )
         .await
         {
-            Ok(Ok((len, source))) => {
-                buf.truncate(len);
-                self.handle_incoming_sip(&buf, source);
-            }
-            _ => {}
+            buf.truncate(len);
+            self.handle_incoming_sip(&buf, source);
         }
 
         // Check for expired timers
@@ -404,12 +401,11 @@ impl StackInstance {
                 self.events.push(StackEvent::IncomingCall { call_id });
             }
             ManagerEvent::Provisional(_response) => {
-                // Remote is ringing
-                for (call_id, _) in &self.outbound_calls {
+                // Remote is ringing — surface the first known outbound call.
+                if let Some(call_id) = self.outbound_calls.keys().next() {
                     self.events.push(StackEvent::CallRinging {
                         call_id: call_id.clone(),
                     });
-                    break;
                 }
             }
             ManagerEvent::InviteSuccess(response) => {
@@ -560,7 +556,7 @@ impl StackInstance {
             if parts.len() >= 2 {
                 let uri = parts[1];
                 // Extract host:port from sip:user@host:port
-                let host = uri.strip_prefix("sip:")?.split('@').last()?;
+                let host = uri.strip_prefix("sip:")?.split('@').next_back()?;
                 let host = host.split(';').next()?; // Remove parameters
                 return host.parse().ok();
             }
@@ -618,11 +614,10 @@ impl StackInstance {
             .into_iter()
             .next()
             .unwrap_or_default();
-        let via_value = if invite_via.starts_with("Via: ") {
-            invite_via[5..].to_string()
-        } else {
-            invite_via
-        };
+        let via_value = invite_via
+            .strip_prefix("Via: ")
+            .map(|s| s.to_string())
+            .unwrap_or(invite_via);
 
         // Build SIP response manually
         let response_str = format!(
@@ -676,11 +671,10 @@ impl StackInstance {
             .into_iter()
             .next()
             .unwrap_or_default();
-        let via_value = if invite_via.starts_with("Via: ") {
-            invite_via[5..].to_string()
-        } else {
-            invite_via
-        };
+        let via_value = invite_via
+            .strip_prefix("Via: ")
+            .map(|s| s.to_string())
+            .unwrap_or(invite_via);
 
         // Build SIP error response manually
         let response_str = format!(

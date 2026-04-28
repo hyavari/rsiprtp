@@ -418,7 +418,7 @@ mod tests {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
             if let Some(limit) = self.fail_on_write_after {
                 if self.write_calls >= limit {
-                    return Err(io::Error::new(io::ErrorKind::Other, "forced write error"));
+                    return Err(io::Error::other("forced write error"));
                 }
             }
             self.write_calls += 1;
@@ -427,7 +427,7 @@ mod tests {
 
         fn flush(&mut self) -> io::Result<()> {
             if self.fail_on_flush {
-                return Err(io::Error::new(io::ErrorKind::Other, "forced flush error"));
+                return Err(io::Error::other("forced flush error"));
             }
             Ok(())
         }
@@ -436,7 +436,7 @@ mod tests {
     impl Seek for FailingWriter {
         fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
             if self.fail_on_seek {
-                return Err(io::Error::new(io::ErrorKind::Other, "forced seek error"));
+                return Err(io::Error::other("forced seek error"));
             }
             self.inner.seek(pos)
         }
@@ -465,7 +465,7 @@ mod tests {
     impl Seek for ToggleSeekReader {
         fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
             if self.fail_seek.load(Ordering::SeqCst) {
-                return Err(io::Error::new(io::ErrorKind::Other, "forced seek error"));
+                return Err(io::Error::other("forced seek error"));
             }
             self.inner.seek(pos)
         }
@@ -488,7 +488,7 @@ mod tests {
     impl Read for ToggleReadReader {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
             if self.fail_read.load(Ordering::SeqCst) {
-                return Err(io::Error::new(io::ErrorKind::Other, "forced read error"));
+                return Err(io::Error::other("forced read error"));
             }
             self.inner.read(buf)
         }

@@ -79,14 +79,8 @@ fn force_local_addr_error_once() {
 #[cfg(test)]
 fn take_forced_accept_error() -> Option<std::io::Error> {
     match FORCE_ACCEPT_ERROR.swap(0, Ordering::SeqCst) {
-        1 => Some(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "forced accept error",
-        )),
-        2 => Some(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "forced accept error other",
-        )),
+        1 => Some(std::io::Error::other("forced accept error")),
+        2 => Some(std::io::Error::other("forced accept error other")),
         3 => Some(std::io::Error::new(
             std::io::ErrorKind::ConnectionAborted,
             "forced accept error",
@@ -98,7 +92,7 @@ fn take_forced_accept_error() -> Option<std::io::Error> {
 #[cfg(test)]
 fn take_forced_error(flag: &AtomicU8, message: &str) -> Option<std::io::Error> {
     if flag.swap(0, Ordering::SeqCst) == 1 {
-        Some(std::io::Error::new(std::io::ErrorKind::Other, message))
+        Some(std::io::Error::other(message))
     } else {
         None
     }

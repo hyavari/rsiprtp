@@ -974,7 +974,7 @@ Content-Length: 0\r\n\
 \r\n";
         let parsed = SipMessage::parse(msg).unwrap();
         let invite = parsed.as_request().expect("expected request");
-        let is_secure = DialogInfo::detect_secure_transport(&invite);
+        let is_secure = DialogInfo::detect_secure_transport(invite);
         assert!(!is_secure);
     }
 
@@ -990,7 +990,7 @@ Content-Length: 0\r\n\
 \r\n";
         let parsed = SipMessage::parse(msg).unwrap();
         let invite = parsed.as_request().expect("expected request");
-        let is_secure = DialogInfo::detect_secure_transport(&invite);
+        let is_secure = DialogInfo::detect_secure_transport(invite);
         assert!(!is_secure);
     }
 

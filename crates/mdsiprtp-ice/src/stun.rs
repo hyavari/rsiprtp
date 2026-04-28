@@ -79,7 +79,7 @@ fn take_forced_error(flag: &AtomicU64, message: &str) -> Option<std::io::Error> 
     let current = current_thread_id();
     if flag.load(Ordering::SeqCst) == current {
         let _ = flag.compare_exchange(current, 0, Ordering::SeqCst, Ordering::SeqCst);
-        Some(std::io::Error::new(std::io::ErrorKind::Other, message))
+        Some(std::io::Error::other(message))
     } else {
         None
     }
@@ -537,7 +537,7 @@ mod tests {
     // StunError tests
     #[test]
     fn test_stun_error_io() {
-        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "test");
+        let io_err = std::io::Error::other("test");
         let err: StunError = io_err.into();
         assert!(err.to_string().contains("IO error"));
     }
@@ -1524,8 +1524,11 @@ mod tests {
     // Edge cases for port XORing
     #[test]
     fn test_parse_xor_mapped_address_zero_port() {
-        let xor_port = 0u16 ^ (MAGIC_COOKIE >> 16) as u16;
-        let xor_ip = [0 ^ 0x21, 0 ^ 0x12, 0 ^ 0xA4, 0 ^ 0x42];
+        // XOR-mapped representation of port 0 / IP 0.0.0.0:
+        // port_xor = 0 ^ (MAGIC_COOKIE >> 16)
+        // ip_xor   = 0.0.0.0 ^ MAGIC_COOKIE bytes
+        let xor_port = (MAGIC_COOKIE >> 16) as u16;
+        let xor_ip = [0x21, 0x12, 0xA4, 0x42];
 
         let data = [
             0x00,

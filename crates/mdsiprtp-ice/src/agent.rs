@@ -824,10 +824,7 @@ fn take_forced_host_local_addr_error() -> Option<std::io::Error> {
             Ordering::SeqCst,
             Ordering::SeqCst,
         );
-        Some(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "forced local_addr error",
-        ))
+        Some(std::io::Error::other("forced local_addr error"))
     } else {
         None
     }
@@ -844,10 +841,7 @@ fn take_forced_stun_recv_error() -> Option<std::io::Error> {
     if FORCE_STUN_RECV_ERROR.load(Ordering::SeqCst) == current {
         let _ =
             FORCE_STUN_RECV_ERROR.compare_exchange(current, 0, Ordering::SeqCst, Ordering::SeqCst);
-        Some(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "forced recv_from error",
-        ))
+        Some(std::io::Error::other("forced recv_from error"))
     } else {
         None
     }
@@ -952,7 +946,7 @@ mod tests {
     // IceError tests
     #[test]
     fn test_ice_error_io() {
-        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "test");
+        let io_err = std::io::Error::other("test");
         let err: IceError = io_err.into();
         assert!(err.to_string().contains("IO error"));
     }
@@ -1162,10 +1156,7 @@ mod tests {
     }
 
     fn bind_err() -> std::io::Result<std::net::UdpSocket> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "bind failed",
-        ))
+        Err(std::io::Error::other("bind failed"))
     }
 
     fn connect_ok(socket: &std::net::UdpSocket) -> std::io::Result<()> {
@@ -1173,10 +1164,7 @@ mod tests {
     }
 
     fn connect_err(_socket: &std::net::UdpSocket) -> std::io::Result<()> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "connect failed",
-        ))
+        Err(std::io::Error::other("connect failed"))
     }
 
     fn local_addr_ok(socket: &std::net::UdpSocket) -> std::io::Result<std::net::SocketAddr> {
@@ -1184,10 +1172,7 @@ mod tests {
     }
 
     fn local_addr_err(_socket: &std::net::UdpSocket) -> std::io::Result<std::net::SocketAddr> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "addr failed",
-        ))
+        Err(std::io::Error::other("addr failed"))
     }
 
     #[test]
@@ -3065,17 +3050,14 @@ mod tests {
         let (controlled_tx, controlled_rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
             let mut buf = vec![0u8; 1024];
-            for _ in 0..2 {
-                let (len, peer) = mock_socket.recv_from(&mut buf).await.unwrap();
-                // Check for ICE-CONTROLLED attribute (0x8029)
-                let has_controlled = buf[..len].windows(2).any(|w| w[0] == 0x80 && w[1] == 0x29);
-                let _ = controlled_tx.send(has_controlled);
+            let (len, peer) = mock_socket.recv_from(&mut buf).await.unwrap();
+            // Check for ICE-CONTROLLED attribute (0x8029)
+            let has_controlled = buf[..len].windows(2).any(|w| w[0] == 0x80 && w[1] == 0x29);
+            let _ = controlled_tx.send(has_controlled);
 
-                let txn_id: [u8; 12] = buf[8..20].try_into().expect("short STUN request");
-                let response = MockStunServer::build_connectivity_check_response(&txn_id);
-                let _ = mock_socket.send_to(&response, peer).await;
-                break;
-            }
+            let txn_id: [u8; 12] = buf[8..20].try_into().expect("short STUN request");
+            let response = MockStunServer::build_connectivity_check_response(&txn_id);
+            let _ = mock_socket.send_to(&response, peer).await;
         });
 
         let result = agent
@@ -3257,17 +3239,14 @@ mod tests {
         let (username_tx, username_rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
             let mut buf = vec![0u8; 1024];
-            for _ in 0..2 {
-                let (len, peer) = mock_socket.recv_from(&mut buf).await.unwrap();
-                let payload = String::from_utf8_lossy(&buf[..len]);
-                let found_username = payload.contains("remoteusr") & payload.contains("localusr");
+            let (len, peer) = mock_socket.recv_from(&mut buf).await.unwrap();
+            let payload = String::from_utf8_lossy(&buf[..len]);
+            let found_username = payload.contains("remoteusr") & payload.contains("localusr");
 
-                let _ = username_tx.send(found_username);
-                let txn_id: [u8; 12] = buf[8..20].try_into().expect("short STUN request");
-                let response = MockStunServer::build_connectivity_check_response(&txn_id);
-                let _ = mock_socket.send_to(&response, peer).await;
-                break;
-            }
+            let _ = username_tx.send(found_username);
+            let txn_id: [u8; 12] = buf[8..20].try_into().expect("short STUN request");
+            let response = MockStunServer::build_connectivity_check_response(&txn_id);
+            let _ = mock_socket.send_to(&response, peer).await;
         });
 
         let result = agent

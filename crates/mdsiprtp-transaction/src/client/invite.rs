@@ -856,6 +856,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::clone_on_copy)] // exercise derived Clone for coverage
     fn test_state_enum_clone() {
         let state = State::Calling;
         let cloned = state.clone();

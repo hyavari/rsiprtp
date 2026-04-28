@@ -424,7 +424,7 @@ mod packet_building {
         assert_eq!(parsed.version, 2);
         assert_eq!(parsed.payload_type, 0);
         assert_eq!(parsed.ssrc, 12345);
-        assert_eq!(parsed.marker, true);
+        assert!(parsed.marker);
         assert_eq!(&parsed.payload[..], &original_payload[..]);
     }
 

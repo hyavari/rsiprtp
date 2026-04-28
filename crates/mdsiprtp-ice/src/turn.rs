@@ -134,7 +134,7 @@ fn take_forced_error(flag: &AtomicU64, message: &str) -> Option<std::io::Error> 
     let current = current_thread_id();
     if flag.load(Ordering::SeqCst) == current {
         let _ = flag.compare_exchange(current, 0, Ordering::SeqCst, Ordering::SeqCst);
-        Some(std::io::Error::new(std::io::ErrorKind::Other, message))
+        Some(std::io::Error::other(message))
     } else {
         None
     }
@@ -1192,7 +1192,7 @@ mod tests {
     // TurnError tests
     #[test]
     fn test_turn_error_io() {
-        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "test error");
+        let io_err = std::io::Error::other("test error");
         let err: TurnError = io_err.into();
         let msg = err.to_string();
         assert!(msg.contains("IO error"));

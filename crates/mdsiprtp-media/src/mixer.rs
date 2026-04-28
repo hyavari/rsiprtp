@@ -627,9 +627,9 @@ mod tests {
     fn test_active_speakers_sorted() {
         let mut detector = ActiveSpeakerDetector::new();
 
-        detector.update(1, &vec![10000i16; 100]);
-        detector.update(2, &vec![5000i16; 100]);
-        detector.update(3, &vec![7500i16; 100]);
+        detector.update(1, &[10000i16; 100]);
+        detector.update(2, &[5000i16; 100]);
+        detector.update(3, &[7500i16; 100]);
 
         let speakers = detector.get_active_speakers();
 
@@ -884,8 +884,8 @@ mod tests {
     fn test_active_speaker_remove() {
         let mut detector = ActiveSpeakerDetector::new();
 
-        detector.update(1, &vec![10000i16; 100]);
-        detector.update(2, &vec![5000i16; 100]);
+        detector.update(1, &[10000i16; 100]);
+        detector.update(2, &[5000i16; 100]);
 
         detector.remove(1);
 
@@ -898,8 +898,8 @@ mod tests {
     fn test_active_speaker_clear() {
         let mut detector = ActiveSpeakerDetector::new();
 
-        detector.update(1, &vec![10000i16; 100]);
-        detector.update(2, &vec![5000i16; 100]);
+        detector.update(1, &[10000i16; 100]);
+        detector.update(2, &[5000i16; 100]);
 
         detector.clear();
 
@@ -933,7 +933,7 @@ mod tests {
 
         // Send many updates to test history trimming
         for _ in 0..20 {
-            detector.update(1, &vec![5000i16; 100]);
+            detector.update(1, &[5000i16; 100]);
         }
 
         // Should still work (history internally bounded)
@@ -983,15 +983,15 @@ mod tests {
 
     #[test]
     fn test_auto_gain_control_clipping() {
-        // Audio that will clip when amplified
+        // Audio that will clip when amplified at high gain.
+        // peak = 20000, target_peak = 1.5 * 32767 ≈ 49150, naive gain = 2.46,
+        // but max_gain = 10.0 allows it -> 20000 * 2.46 ≈ 49150, clamped to i16::MAX.
         let mut samples: Vec<i16> = vec![20000, -20000, 15000];
-        auto_gain_control(&mut samples, 1.0, 10.0);
+        auto_gain_control(&mut samples, 1.5, 10.0);
 
-        // Should be clamped to valid range
-        for &s in &samples {
-            assert!(s >= i16::MIN);
-            assert!(s <= i16::MAX);
-        }
+        // First two samples should saturate at the i16 extremes.
+        assert_eq!(samples[0], i16::MAX);
+        assert_eq!(samples[1], i16::MIN);
     }
 
     #[test]

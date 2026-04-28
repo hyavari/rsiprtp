@@ -429,8 +429,8 @@ mod tests {
         rtp[10] = 0x56;
         rtp[11] = 0x78;
         // Payload
-        for i in 12..172 {
-            rtp[i] = (i - 12) as u8;
+        for (i, byte) in rtp[12..172].iter_mut().enumerate() {
+            *byte = i as u8;
         }
         rtp
     }

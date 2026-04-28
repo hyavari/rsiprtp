@@ -988,8 +988,10 @@ mod tests {
 
     #[test]
     fn test_transfer_info_clone() {
-        let mut info = TransferInfo::default();
-        info.target = Some("sip:test@example.com".to_string());
+        let info = TransferInfo {
+            target: Some("sip:test@example.com".to_string()),
+            ..Default::default()
+        };
         let cloned = info.clone();
         assert_eq!(cloned.target, Some("sip:test@example.com".to_string()));
     }

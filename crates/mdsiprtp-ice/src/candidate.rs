@@ -366,6 +366,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::clone_on_copy)] // exercise derived Clone for coverage
     fn test_candidate_type_clone() {
         let ct = CandidateType::Host;
         let cloned = ct.clone();
@@ -433,6 +434,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::clone_on_copy)] // exercise derived Clone for coverage
     fn test_transport_clone() {
         let t = Transport::Udp;
         let cloned = t.clone();

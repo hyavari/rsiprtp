@@ -97,14 +97,8 @@ fn take_skip_connect_insert_for(dest: SocketAddr) -> bool {
 #[cfg(test)]
 fn take_forced_accept_error() -> Option<std::io::Error> {
     match FORCE_ACCEPT_ERROR.swap(0, Ordering::SeqCst) {
-        1 => Some(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "forced accept error",
-        )),
-        2 => Some(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "forced accept error other",
-        )),
+        1 => Some(std::io::Error::other("forced accept error")),
+        2 => Some(std::io::Error::other("forced accept error other")),
         3 => Some(std::io::Error::new(
             std::io::ErrorKind::ConnectionAborted,
             "forced accept error",
@@ -116,7 +110,7 @@ fn take_forced_accept_error() -> Option<std::io::Error> {
 #[cfg(test)]
 fn take_forced_error(flag: &AtomicU8, message: &str) -> Option<std::io::Error> {
     if flag.swap(0, Ordering::SeqCst) == 1 {
-        Some(std::io::Error::new(std::io::ErrorKind::Other, message))
+        Some(std::io::Error::other(message))
     } else {
         None
     }
@@ -1360,7 +1354,7 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         // Send only 50 bytes of body
-        stream.write_all(&vec![b'A'; 50]).await.unwrap();
+        stream.write_all(&[b'A'; 50]).await.unwrap();
         stream.flush().await.unwrap();
 
         // Should not receive message yet (incomplete)
@@ -1368,7 +1362,7 @@ mod tests {
         assert!(result.is_err());
 
         // Now send remaining 50 bytes
-        stream.write_all(&vec![b'B'; 50]).await.unwrap();
+        stream.write_all(&[b'B'; 50]).await.unwrap();
         stream.flush().await.unwrap();
 
         // Should now receive complete message
@@ -1866,7 +1860,7 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-            assert!(received.data.len() > 0);
+            assert!(!received.data.is_empty());
         }
     }
 }

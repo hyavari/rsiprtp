@@ -629,7 +629,7 @@ mod tests {
         let request = manager.create_register().unwrap();
 
         assert_eq!(manager.state(), RegistrationState::Refreshing);
-        assert!(request.to_bytes().len() > 0);
+        assert!(!request.to_bytes().is_empty());
     }
 
     #[test]

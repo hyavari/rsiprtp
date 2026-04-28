@@ -594,6 +594,7 @@ Content-Length: 0\r\n\
     }
 
     #[test]
+    #[allow(clippy::clone_on_copy)] // exercise derived Clone for coverage
     fn test_dialog_handle_clone() {
         let handle = DialogHandle(1);
         let cloned = handle.clone();

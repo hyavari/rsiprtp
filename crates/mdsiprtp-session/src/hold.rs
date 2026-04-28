@@ -603,8 +603,10 @@ mod tests {
 
     #[test]
     fn test_call_hold_info_clone() {
-        let mut info = CallHoldInfo::default();
-        info.state = HoldState::LocalHold;
+        let info = CallHoldInfo {
+            state: HoldState::LocalHold,
+            ..Default::default()
+        };
         let cloned = info.clone();
         assert_eq!(cloned.state, HoldState::LocalHold);
     }

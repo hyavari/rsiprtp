@@ -233,7 +233,7 @@ mod sdp_concurrency {
                         let offer = SdpBuilder::new(local_addr)
                             .add_media(MediaBuilder::audio(local_port + j).pcmu().pcma())
                             .build();
-                        assert!(offer.media.len() > 0);
+                        assert!(!offer.media.is_empty());
 
                         // Create answer to the offer
                         let answer_codecs = vec![Codec::pcmu()];

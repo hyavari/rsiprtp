@@ -930,6 +930,7 @@ Content-Length: 0\r\n\
     }
 
     #[test]
+    #[allow(clippy::clone_on_copy)] // exercise derived Clone for coverage
     fn test_role_clone() {
         let role = Role::Uac;
         let cloned = role.clone();

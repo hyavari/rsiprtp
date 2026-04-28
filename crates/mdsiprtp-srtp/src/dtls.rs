@@ -882,7 +882,7 @@ mod tests {
 
     #[test]
     fn test_dtls_error_io() {
-        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "test io error");
+        let io_err = std::io::Error::other("test io error");
         let dtls_err: DtlsError = io_err.into();
         assert!(dtls_err.to_string().contains("test io error"));
     }
@@ -918,6 +918,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::clone_on_copy)] // exercise derived Clone for coverage
     fn test_dtls_role_clone_copy() {
         let role = DtlsRole::Client;
         let cloned = role.clone();
@@ -927,6 +928,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::clone_on_copy)] // exercise derived Clone for coverage
     fn test_fingerprint_hash_clone_copy() {
         let hash = FingerprintHash::Sha256;
         let cloned = hash.clone();
@@ -936,6 +938,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::clone_on_copy)] // exercise derived Clone for coverage
     fn test_srtp_profile_clone_copy() {
         let profile = SrtpProfile::Aes128CmHmacSha1_80;
         let cloned = profile.clone();
@@ -945,6 +948,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::clone_on_copy)] // exercise derived Clone for coverage
     fn test_dtls_state_clone_copy() {
         let state = DtlsState::Connected;
         let cloned = state.clone();
