@@ -36,8 +36,8 @@ default-members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
-authors = ["MD"]
+license = "MIT OR Apache-2.0"
+authors = ["Martin Davidson <martingdavidson@gmail.com>"]
 
 [workspace.dependencies]
 # Async runtime

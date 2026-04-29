@@ -3,7 +3,8 @@ name = "gabby"
 version = "0.1.0"
 edition = "2021"
 description = "Voice AI SIP agent - talk to an AI over the phone"
-license = "MIT"
+license = "MIT OR Apache-2.0"
+publish = false
 
 [[bin]]
 name = "gabby"
