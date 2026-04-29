@@ -17,6 +17,7 @@
 //! let call_id = manager.create_call("sip:bob@example.com".to_string());
 //! ```
 
+pub mod bitrate_bridge;
 pub mod call;
 pub mod hold;
 pub mod manager;
@@ -24,6 +25,7 @@ pub mod registration;
 pub mod transfer;
 
 // Re-export main types
+pub use bitrate_bridge::BitrateBridge;
 pub use call::{
     Call, CallConfig, CallDirection, CallEndReason, CallEvent, CallId, CallState, Dialog,
     MediaSession,
