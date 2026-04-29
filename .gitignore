@@ -1,6 +1,41 @@
+# Rust build artifacts
 target/
+*.rs.bk
+
+# Cargo lock for libraries is intentionally committed (workspace contains
+# the gabby binary too).
+
+# Coverage output
+*.profraw
+*.profdata
+lcov.info
+coverage/
+
+# Gabby runtime assets (downloaded by setup scripts, not source)
 crates/gabby/models/
 crates/gabby/vendor/vosk/
 
 # Code concatenation dumps (may contain embedded test keys)
 *-COMBINED.TXT
+
+# Local environment / secrets
+.env
+.env.*
+!.env.example
+.envrc
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.bak
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
