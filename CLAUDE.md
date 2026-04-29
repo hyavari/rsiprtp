@@ -9,13 +9,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build Commands
 
 ```bash
-# Build entire workspace
+# Build the SIP/RTP stack (gabby is excluded from default-members because
+# it requires the Vosk native library)
+cargo build
+
+# Build everything including gabby (requires VOSK_LIB_DIR on Windows)
 cargo build --workspace
 
-# Build excluding gabby (useful on Windows without Vosk)
-cargo build --workspace --exclude gabby
-
-# Build gabby on Windows (requires VOSK_LIB_DIR set)
+# Build gabby explicitly on Windows (requires VOSK_LIB_DIR set)
 cargo build -p gabby
 
 # Run tests

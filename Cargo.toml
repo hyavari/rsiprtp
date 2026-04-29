@@ -15,6 +15,23 @@ members = [
     "crates/mdsiprtp",
     "crates/gabby",
 ]
+# gabby is excluded from default builds because it requires the Vosk native
+# library. Build it explicitly with `cargo build -p gabby` once VOSK_LIB_DIR
+# is set (see crates/gabby/scripts/setup_windows.ps1).
+default-members = [
+    "crates/mdsiprtp-core",
+    "crates/mdsiprtp-sip",
+    "crates/mdsiprtp-transaction",
+    "crates/mdsiprtp-dialog",
+    "crates/mdsiprtp-transport",
+    "crates/mdsiprtp-sdp",
+    "crates/mdsiprtp-rtp",
+    "crates/mdsiprtp-srtp",
+    "crates/mdsiprtp-ice",
+    "crates/mdsiprtp-media",
+    "crates/mdsiprtp-session",
+    "crates/mdsiprtp",
+]
 
 [workspace.package]
 version = "0.1.0"
