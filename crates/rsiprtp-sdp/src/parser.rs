@@ -47,11 +47,15 @@ impl SessionDescription {
                 continue;
             }
 
-            if line.len() < 2 || line.chars().nth(1) != Some('=') {
+            // SDP type codes are a single ASCII letter followed by '='.
+            // Reject any line whose first two bytes don't match that shape,
+            // so the byte-index slice below is always on a char boundary.
+            let bytes = line.as_bytes();
+            if bytes.len() < 2 || !bytes[0].is_ascii_alphabetic() || bytes[1] != b'=' {
                 continue;
             }
 
-            let type_char = line.chars().next().unwrap();
+            let type_char = bytes[0] as char;
             let value = &line[2..];
 
             // If we're in media section, attributes go to media
@@ -795,6 +799,24 @@ a=rtpmap:0 PCMU/8000\n";
         let sdp = "v=0\no=- 0 0 IN IP4 0.0.0.0\ns=-\nx\nt=0 0\n";
         let result = SessionDescription::parse(sdp);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_non_ascii_first_char_fuzz_001() {
+        // Regression: fuzz target sdp_session crashed parsing this 41-byte
+        // valid-UTF-8 input — first char is the 4-byte codepoint U+9E2A3,
+        // followed by "=0\r\no=ale 12341 60 IN I" + 10 NULs + "9 n=".
+        // Old code did `&line[2..]` after only checking that the *second
+        // char* was '=' (which it was), causing a UTF-8 boundary panic.
+        let bytes: [u8; 41] = [
+            0xf2, 0x9e, 0x8a, 0xa3, 0x3d, 0x30, 0x0d, 0x0a, 0x6f, 0x3d, 0x61, 0x6c, 0x65, 0x20,
+            0x31, 0x32, 0x33, 0x34, 0x31, 0x20, 0x36, 0x30, 0x20, 0x49, 0x4e, 0x20, 0x49, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x39, 0x20, 0x6e, 0x3d,
+        ];
+        let s = std::str::from_utf8(&bytes).expect("crash input is valid UTF-8");
+        // Must not panic; must return Err (no v=0, no t=, etc.).
+        let result = SessionDescription::parse(s);
+        assert!(result.is_err());
     }
 
     // Origin tests
