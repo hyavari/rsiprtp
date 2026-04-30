@@ -144,6 +144,12 @@ fn parse_key_params(s: &str) -> Result<ParsedKeyParams, String> {
         if let Some(exp_str) = part.strip_prefix("2^") {
             // Lifetime
             let exp: u32 = exp_str.parse().map_err(|_| "Invalid lifetime exponent")?;
+            // RFC 4568 §6.1: SRTP lifetime SHALL NOT exceed 2^48 for the
+            // supported AES-CM crypto suites. Bound the shift to avoid
+            // a debug-build overflow panic for attacker-controlled exponents.
+            if exp > 48 {
+                return Err(format!("Lifetime exponent {} exceeds RFC 4568 max of 48", exp));
+            }
             lifetime = Some(1u64 << exp);
         } else if part.contains(':') {
             // MKI
@@ -192,6 +198,46 @@ mod tests {
         .unwrap();
 
         assert_eq!(sdes.lifetime, Some(1u64 << 31));
+    }
+
+    /// Regression test for fuzz crash srtp_sdes-001:
+    /// `parse_key_params` previously computed `1u64 << exp` without bounding
+    /// `exp`, panicking with "attempt to shift left with overflow" in debug
+    /// builds for any `2^N` lifetime where N >= 64. The fix rejects exponents
+    /// above the RFC 4568 §6.1 maximum of 2^48.
+    #[test]
+    fn test_sdes_parse_huge_lifetime_fuzz_001() {
+        // Original fuzz-found input (lifetime "2^292") must return Err, not panic.
+        let result = SdesAttribute::parse(
+            "1 AES_CM_128_HMAC_SHA1_80 inline:WVNfX19zKDBGgmRT3RVTuqgr9TWJaPLzNG6BDfGc|2^292",
+        );
+        assert!(result.is_err(), "huge lifetime exponent must be rejected");
+
+        // Boundary: exp == 64 is the smallest value that overflows u64; reject.
+        let result = SdesAttribute::parse(
+            "1 AES_CM_128_HMAC_SHA1_80 inline:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA|2^64",
+        );
+        assert!(result.is_err(), "exp == 64 must be rejected");
+
+        // Boundary: exp == 49 is just above RFC 4568 max; reject.
+        let result = SdesAttribute::parse(
+            "1 AES_CM_128_HMAC_SHA1_80 inline:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA|2^49",
+        );
+        assert!(result.is_err(), "exp > 48 must be rejected");
+
+        // Sanity: a normal lifetime (2^31) still parses successfully.
+        let sdes = SdesAttribute::parse(
+            "1 AES_CM_128_HMAC_SHA1_80 inline:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA|2^31",
+        )
+        .unwrap();
+        assert_eq!(sdes.lifetime, Some(1u64 << 31));
+
+        // Sanity: 2^48 (RFC 4568 max) still accepted.
+        let sdes = SdesAttribute::parse(
+            "1 AES_CM_128_HMAC_SHA1_80 inline:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA|2^48",
+        )
+        .unwrap();
+        assert_eq!(sdes.lifetime, Some(1u64 << 48));
     }
 
     #[test]
