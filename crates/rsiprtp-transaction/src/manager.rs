@@ -29,9 +29,13 @@ pub struct TransactionHandle(u64);
 /// Type of transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransactionType {
+    /// Client transaction for an INVITE request (RFC 3261 §17.1.1).
     InviteClient,
+    /// Client transaction for a non-INVITE request (RFC 3261 §17.1.2).
     NonInviteClient,
+    /// Server transaction for an INVITE request (RFC 3261 §17.2.1).
     InviteServer,
+    /// Server transaction for a non-INVITE request (RFC 3261 §17.2.2).
     NonInviteServer,
 }
 

@@ -4,12 +4,18 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Instant;
 
 use rsiprtp_core::random_u32;
 use rsiprtp_dialog::DialogId;
-use rsiprtp_media::{G711Codec, G711Variant, JitterBuffer, JitterBufferConfig, PlayoutDecision};
+use rsiprtp_media::{JitterBuffer, JitterBufferConfig, PlayoutDecision};
+use rsiprtp_rtp::rtcp::{RtcpCompound, RtcpPacket};
+use rsiprtp_rtp::session::CongestionController;
 use rsiprtp_rtp::{RtpPacket, RtpSession};
 use rsiprtp_sdp::negotiation::{Codec, NegotiatedMedia};
+
+use crate::bitrate_bridge::BitrateBridge;
+use crate::session_codec::SessionCodec;
 
 /// Simplified dialog info for call tracking.
 ///
@@ -207,15 +213,38 @@ impl std::fmt::Display for CallId {
     }
 }
 
+/// Internal pairing of a `CongestionController` with the
+/// `BitrateBridge` that drives an adaptive codec from its target.
+///
+/// Constructed only for codec variants that actually adapt their
+/// encoder rate at runtime (today: Opus). G.711 / G.722 sessions
+/// leave `MediaSession::adaptive` as `None` — RTCP is still parsed
+/// for them but no adaptation runs.
+struct AdaptiveCongestion {
+    /// Congestion controller (initial / min / max bps).
+    cc: CongestionController,
+    /// Hysteresis filter feeding the codec.
+    bridge: BitrateBridge,
+}
+
+impl std::fmt::Debug for AdaptiveCongestion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AdaptiveCongestion")
+            .field("target_bitrate", &self.cc.target_bitrate())
+            .finish()
+    }
+}
+
 /// Media session for a call.
-#[derive(Debug)]
 pub struct MediaSession {
     /// RTP session for sending/receiving.
     rtp_session: RtpSession,
     /// Jitter buffer for received audio.
     jitter_buffer: JitterBuffer,
-    /// Audio codec.
-    codec: G711Codec,
+    /// Audio codec selected during SDP negotiation.
+    codec: SessionCodec,
+    /// Adaptive congestion + bridge pair, present only for adaptive codecs.
+    adaptive: Option<AdaptiveCongestion>,
     /// Remote RTP address.
     remote_addr: Option<SocketAddr>,
     /// Local RTP port.
@@ -224,23 +253,75 @@ pub struct MediaSession {
     active: bool,
 }
 
+impl std::fmt::Debug for MediaSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MediaSession")
+            .field("rtp_session", &self.rtp_session)
+            .field("jitter_buffer", &self.jitter_buffer)
+            .field("adaptive", &self.adaptive)
+            .field("remote_addr", &self.remote_addr)
+            .field("local_port", &self.local_port)
+            .field("active", &self.active)
+            .finish()
+    }
+}
+
 impl MediaSession {
-    /// Create a new media session.
-    pub fn new(ssrc: u32, payload_type: u8, clock_rate: u32, local_port: u16) -> Self {
-        let codec_variant = match payload_type {
-            0 => G711Variant::MuLaw,
-            8 => G711Variant::ALaw,
-            _ => G711Variant::MuLaw, // Default
+    /// Create a new media session for an SDP-negotiated codec entry.
+    ///
+    /// For adaptive codecs (Opus today) a `CongestionController` and
+    /// `BitrateBridge` are constructed and stored together. Fixed-rate
+    /// codecs (G.711 / G.722) get `adaptive = None`; their `handle_rtcp`
+    /// and `tick` paths are no-ops apart from parsing.
+    ///
+    /// Returns `Err` if the codec encoding is unsupported by
+    /// [`SessionCodec::for_negotiated`].
+    pub fn for_negotiated(
+        ssrc: u32,
+        negotiated: &Codec,
+        local_port: u16,
+    ) -> Result<Self, String> {
+        let mut codec = SessionCodec::for_negotiated(negotiated)?;
+
+        // Adaptive codecs get a CC + bridge sized to the codec's range.
+        // Bounds (32 / 6 / 128 kbps) are deliberately static — see the
+        // bridge HLD's "Risks / open items" entry on per-deployment tuning.
+        let adaptive = if codec.as_adaptive_mut().is_some() {
+            Some(AdaptiveCongestion {
+                cc: CongestionController::new(32_000, 6_000, 128_000),
+                bridge: BitrateBridge::new(),
+            })
+        } else {
+            None
         };
 
-        Self {
-            rtp_session: RtpSession::new(ssrc, payload_type, clock_rate),
-            jitter_buffer: JitterBuffer::new(JitterBufferConfig::g711()),
-            codec: G711Codec::new(codec_variant),
+        // Match the jitter buffer to the negotiated codec's clock rate
+        // and frame size so packet-pacing math stays in step.
+        let samples_per_packet = codec.samples_per_frame() as u32;
+        let mut jb_config = JitterBufferConfig {
+            clock_rate: negotiated.clock_rate,
+            samples_per_packet,
+            ..JitterBufferConfig::default()
+        };
+        // Preserve the existing G.711 timing for the 8 kHz / 160-sample
+        // path so existing tests and behaviour stay stable.
+        if negotiated.clock_rate == 8000 && samples_per_packet == 160 {
+            jb_config = JitterBufferConfig::g711();
+        }
+
+        Ok(Self {
+            rtp_session: RtpSession::new(
+                ssrc,
+                negotiated.payload_type,
+                negotiated.clock_rate,
+            ),
+            jitter_buffer: JitterBuffer::new(jb_config),
+            codec,
+            adaptive,
             remote_addr: None,
             local_port,
             active: false,
-        }
+        })
     }
 
     /// Set the remote RTP address.
@@ -250,10 +331,19 @@ impl MediaSession {
     }
 
     /// Create an RTP packet from PCM samples.
-    pub fn encode_audio(&mut self, samples: &[i16], marker: bool) -> RtpPacket {
-        let encoded = self.codec.encode(samples);
-        self.rtp_session
-            .create_packet(encoded, samples.len() as u32, marker)
+    ///
+    /// Returns `Err` if the codec rejects the encode (Opus / G.722).
+    /// G.711 is infallible at the codec level; the wrapper preserves
+    /// `Result` for a uniform surface.
+    pub fn encode_audio(
+        &mut self,
+        samples: &[i16],
+        marker: bool,
+    ) -> Result<RtpPacket, String> {
+        let encoded = self.codec.encode(samples)?;
+        Ok(self
+            .rtp_session
+            .create_packet(encoded, samples.len() as u32, marker))
     }
 
     /// Process a received RTP packet and get decoded audio.
@@ -261,8 +351,16 @@ impl MediaSession {
         // Update RTP session statistics
         self.rtp_session.receive_packet(packet);
 
-        // Decode the audio
-        let decoded = self.codec.decode(&packet.payload);
+        // Decode the audio. A decode failure (corrupt payload, etc.) drops
+        // the packet — same fail-open posture as the RTP layer; logged at
+        // warn so the operator sees the bad input but the call continues.
+        let decoded = match self.codec.decode(&packet.payload) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(error = %e, "codec decode failed; dropping packet");
+                return None;
+            }
+        };
 
         // Push into jitter buffer
         self.jitter_buffer
@@ -274,6 +372,53 @@ impl MediaSession {
             Some((decision, samples))
         } else {
             None
+        }
+    }
+
+    /// Hand an inbound RTCP compound packet to the session.
+    ///
+    /// Parses the bytes and routes feedback (currently REMB only) into
+    /// the `CongestionController` when the active codec is adaptive.
+    /// Errors only on malformed input; unknown / non-actionable RTCP
+    /// types are silently ignored per RFC 3550 § 6.1's receiver-leniency
+    /// guidance.
+    ///
+    /// Note: NACK and RTT routing are deferred per HLD § "Risks / open
+    /// items" — they each need their own dispatch from RR / SR (loss
+    /// fraction; LSR / DLSR for RTT).
+    pub fn handle_rtcp(&mut self, bytes: &[u8]) -> Result<(), String> {
+        let compound = RtcpCompound::parse(bytes)?;
+        let Some(adapt) = self.adaptive.as_mut() else {
+            // Fixed-rate codec: no consumer for feedback yet. Parsing
+            // still ran — that's the cheap forward-compat for future
+            // SR/RR telemetry.
+            return Ok(());
+        };
+        for packet in &compound.packets {
+            if let RtcpPacket::Remb(remb) = packet {
+                adapt.cc.on_remb(remb.bitrate);
+            }
+            // SR / RR / NACK / RTT — deferred per HLD; intentionally
+            // not routed in v1.
+        }
+        Ok(())
+    }
+
+    /// Periodic tick. Caller invokes ~every 100 ms.
+    ///
+    /// Drives `CongestionController::update()` and `BitrateBridge::poll()`.
+    /// A codec rejection from the bridge is logged at warn and swallowed —
+    /// it must not fail the call.
+    pub fn tick(&mut self, now: Instant) {
+        let Some(adapt) = self.adaptive.as_mut() else {
+            return;
+        };
+        adapt.cc.update();
+        let target = adapt.cc.target_bitrate();
+        if let Some(adaptive_codec) = self.codec.as_adaptive_mut() {
+            if let Err(e) = adapt.bridge.poll(target, adaptive_codec, now) {
+                tracing::warn!(error = %e, "BitrateBridge::poll rejected by codec");
+            }
         }
     }
 
@@ -398,16 +543,20 @@ impl Call {
     }
 
     /// Set the negotiated media.
-    pub fn set_negotiated_media(&mut self, media: NegotiatedMedia, local_port: u16) {
+    ///
+    /// Returns `Err` if the negotiated codec is unsupported by
+    /// `MediaSession::for_negotiated`. Caller should surface the error
+    /// rather than swallowing — reject the call if no media session can
+    /// be built.
+    pub fn set_negotiated_media(
+        &mut self,
+        media: NegotiatedMedia,
+        local_port: u16,
+    ) -> Result<(), String> {
         // Generate random SSRC
         let ssrc = random_u32();
 
-        let mut session = MediaSession::new(
-            ssrc,
-            media.codec.payload_type,
-            media.codec.clock_rate,
-            local_port,
-        );
+        let mut session = MediaSession::for_negotiated(ssrc, &media.codec, local_port)?;
 
         // Set remote address if available
         if let Some(ref addr) = media.remote_addr {
@@ -418,6 +567,7 @@ impl Call {
 
         self.negotiated_media = Some(media);
         self.media = Some(session);
+        Ok(())
     }
 
     /// Transition to a new state.
@@ -552,9 +702,17 @@ mod tests {
         assert!(events2.is_empty());
     }
 
+    /// Helper: build a PCMU MediaSession the way the old `MediaSession::new`
+    /// did. Used by tests that want a fixed-rate session and don't care
+    /// about codec dispatch.
+    fn pcmu_session(ssrc: u32, local_port: u16) -> MediaSession {
+        MediaSession::for_negotiated(ssrc, &Codec::pcmu(), local_port)
+            .expect("PCMU MediaSession")
+    }
+
     #[test]
     fn test_media_session() {
-        let mut session = MediaSession::new(12345, 0, 8000, 5000);
+        let mut session = pcmu_session(12345, 5000);
 
         assert_eq!(session.local_port(), 5000);
         assert!(!session.is_active());
@@ -569,10 +727,10 @@ mod tests {
 
     #[test]
     fn test_media_encode() {
-        let mut session = MediaSession::new(12345, 0, 8000, 5000);
+        let mut session = pcmu_session(12345, 5000);
 
         let samples = vec![0i16; 160];
-        let packet = session.encode_audio(&samples, true);
+        let packet = session.encode_audio(&samples, true).expect("PCMU encode");
 
         assert!(packet.marker);
         assert_eq!(packet.payload_type, 0);
@@ -592,7 +750,8 @@ mod tests {
             direction: rsiprtp_sdp::parser::Direction::SendRecv,
         };
 
-        call.set_negotiated_media(media, 5000);
+        call.set_negotiated_media(media, 5000)
+            .expect("PCMU media setup");
 
         assert!(call.media().is_some());
         assert_eq!(call.codec().map(|c| c.encoding.as_str()), Some("PCMU"));
@@ -961,7 +1120,8 @@ mod tests {
             remote_addr: Some("10.0.0.1".to_string()),
             direction: rsiprtp_sdp::parser::Direction::SendRecv,
         };
-        call.set_negotiated_media(media, 5000);
+        call.set_negotiated_media(media, 5000)
+            .expect("PCMU media setup");
 
         assert!(call.media().unwrap().is_active());
 
@@ -987,7 +1147,8 @@ mod tests {
             remote_addr: None,
             direction: rsiprtp_sdp::parser::Direction::SendRecv,
         };
-        call.set_negotiated_media(media, 5000);
+        call.set_negotiated_media(media, 5000)
+            .expect("PCMU media setup");
 
         // Now has media
         assert!(call.media_mut().is_some());
@@ -1028,28 +1189,31 @@ mod tests {
     // MediaSession tests
     #[test]
     fn test_media_session_alaw() {
-        let session = MediaSession::new(12345, 8, 8000, 5000);
+        let session = MediaSession::for_negotiated(12345, &Codec::pcma(), 5000)
+            .expect("PCMA MediaSession");
         assert_eq!(session.local_port(), 5000);
         assert!(!session.is_active());
     }
 
     #[test]
     fn test_media_session_unknown_payload() {
-        // Unknown payload type should default to mu-law
-        let session = MediaSession::new(12345, 99, 8000, 5000);
-        assert_eq!(session.local_port(), 5000);
+        // Unsupported codec encodings now surface as Err — previously
+        // payload-type 99 silently fell back to mu-law. Asserting the
+        // explicit rejection is the correct contract under the new API.
+        let unsupported = Codec::new(99, "AMR", 8000);
+        assert!(MediaSession::for_negotiated(12345, &unsupported, 5000).is_err());
     }
 
     #[test]
     fn test_media_session_rtp_session() {
-        let session = MediaSession::new(12345, 0, 8000, 5000);
+        let session = pcmu_session(12345, 5000);
         let rtp = session.rtp_session();
         assert_eq!(rtp.ssrc(), 12345);
     }
 
     #[test]
     fn test_media_session_jitter_stats() {
-        let session = MediaSession::new(12345, 0, 8000, 5000);
+        let session = pcmu_session(12345, 5000);
         let stats = session.jitter_stats();
         assert_eq!(stats.packets_received, 0);
     }
@@ -1057,7 +1221,7 @@ mod tests {
     #[test]
     fn test_media_session_get_audio_frame() {
         use rsiprtp_media::PlayoutDecision;
-        let mut session = MediaSession::new(12345, 0, 8000, 5000);
+        let mut session = pcmu_session(12345, 5000);
 
         // Without primed buffer, should get empty samples
         let (decision, samples) = session.get_audio_frame();
@@ -1068,13 +1232,13 @@ mod tests {
 
     #[test]
     fn test_media_session_receive_rtp() {
-        let mut session = MediaSession::new(12345, 0, 8000, 5000);
+        let mut session = pcmu_session(12345, 5000);
         session.set_remote("10.0.0.1:6000".parse().unwrap());
 
         // Use the existing encode method to create a test packet
         // This is cleaner than manually constructing the packet
         let samples = vec![0i16; 160];
-        let packet = session.encode_audio(&samples, false);
+        let packet = session.encode_audio(&samples, false).expect("PCMU encode");
 
         // First packet won't return audio (buffer not primed)
         let result = session.receive_rtp(&packet);
@@ -1083,14 +1247,14 @@ mod tests {
 
     #[test]
     fn test_media_session_receive_rtp_primes_buffer() {
-        let mut session = MediaSession::new(12345, 0, 8000, 5000);
+        let mut session = pcmu_session(12345, 5000);
         session.set_remote("10.0.0.1:6000".parse().unwrap());
 
         let samples = vec![0i16; 160];
         let mut result = None;
 
         for _ in 0..3 {
-            let packet = session.encode_audio(&samples, false);
+            let packet = session.encode_audio(&samples, false).expect("PCMU encode");
             result = session.receive_rtp(&packet);
         }
 
@@ -1099,7 +1263,7 @@ mod tests {
 
     #[test]
     fn test_media_session_debug() {
-        let session = MediaSession::new(12345, 0, 8000, 5000);
+        let session = pcmu_session(12345, 5000);
         let debug = format!("{:?}", session);
         assert!(debug.contains("MediaSession"));
     }
@@ -1116,7 +1280,8 @@ mod tests {
             direction: rsiprtp_sdp::parser::Direction::SendRecv,
         };
 
-        call.set_negotiated_media(media, 5000);
+        call.set_negotiated_media(media, 5000)
+            .expect("PCMU media setup");
 
         assert!(call.media().is_some());
         // Media not active because no remote address
@@ -1135,7 +1300,8 @@ mod tests {
             direction: rsiprtp_sdp::parser::Direction::SendRecv,
         };
 
-        call.set_negotiated_media(media, 5000);
+        call.set_negotiated_media(media, 5000)
+            .expect("PCMU media setup");
 
         assert!(call.media().is_some());
         // Media not active because invalid address

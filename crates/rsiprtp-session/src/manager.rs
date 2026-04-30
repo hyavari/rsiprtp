@@ -146,9 +146,17 @@ impl CallManager {
 
         self.calls.insert(call_id.clone(), call);
 
-        // Update call with negotiated media
+        // Update call with negotiated media. If the negotiated codec is
+        // unsupported by `MediaSession::for_negotiated`, surface the
+        // error by rejecting the INVITE — the call has nothing to do
+        // with no media session, and silently accepting would leave a
+        // dialog with no media path.
         let call = self.calls.get_mut(&call_id).expect("call inserted");
-        call.set_negotiated_media(media, local_port);
+        if let Err(e) = call.set_negotiated_media(media, local_port) {
+            tracing::warn!(error = %e, "rejecting INVITE: media session construction failed");
+            self.calls.remove(&call_id);
+            return None;
+        }
 
         // Register dialog mapping
         let dialog_id = call.dialog_id().expect("dialog id");
@@ -184,7 +192,13 @@ impl CallManager {
         };
 
         call.set_dialog(dialog);
-        call.set_negotiated_media(media, local_port);
+        // Surface a media-session construction error by failing the
+        // 200-OK handler — the caller treats `false` as "could not
+        // establish call".
+        if let Err(e) = call.set_negotiated_media(media, local_port) {
+            tracing::warn!(error = %e, "200 OK media setup failed");
+            return false;
+        }
         call.handle_answer();
 
         // Register dialog mapping
@@ -211,12 +225,16 @@ impl CallManager {
         let local_port = self.allocate_rtp_port();
 
         if let Some(call) = self.calls.get_mut(call_id) {
-            // If early media SDP, set up media session
+            // If early media SDP, set up media session. A construction
+            // error is surfaced via warn — the call continues without
+            // early media, the subsequent 200 OK will retry negotiation.
             if has_sdp {
                 if let Some(answer_sdp) = sdp {
                     let negotiated = process_answer(answer_sdp);
                     if let Some(media) = negotiated.into_iter().next() {
-                        call.set_negotiated_media(media, local_port);
+                        if let Err(e) = call.set_negotiated_media(media, local_port) {
+                            tracing::warn!(error = %e, "early-media setup failed");
+                        }
                     }
                 }
             }

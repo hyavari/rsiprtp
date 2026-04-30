@@ -218,10 +218,15 @@ impl Timing {
 /// Media type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MediaType {
+    /// Audio media (RTP audio stream).
     Audio,
+    /// Video media (RTP video stream).
     Video,
+    /// Application-defined media (e.g. data channels, BFCP).
     Application,
+    /// Instant message media (RFC 3428 / MSRP).
     Message,
+    /// Any media type not recognized by this implementation.
     Other,
 }
 
@@ -445,20 +450,28 @@ impl Fmtp {
 /// SDP parse error.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum SdpParseError {
+    /// Mandatory `v=` (protocol version) line is absent.
     #[error("Missing version")]
     MissingVersion,
+    /// `v=` line is present but its value is not a valid SDP version number.
     #[error("Invalid version")]
     InvalidVersion,
+    /// Mandatory `o=` (origin) line is absent.
     #[error("Missing origin")]
     MissingOrigin,
+    /// `o=` line is malformed or has the wrong number of fields.
     #[error("Invalid origin")]
     InvalidOrigin,
+    /// `c=` (connection) line is malformed (bad address type or address).
     #[error("Invalid connection")]
     InvalidConnection,
+    /// Mandatory `t=` (timing) line is absent.
     #[error("Missing timing")]
     MissingTiming,
+    /// `t=` line is malformed (start/stop times not parseable).
     #[error("Invalid timing")]
     InvalidTiming,
+    /// `m=` (media description) line is malformed.
     #[error("Invalid media")]
     InvalidMedia,
 }

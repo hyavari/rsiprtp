@@ -52,7 +52,10 @@ pub enum TransferError {
 
     /// Transfer rejected.
     #[error("transfer rejected: {code}")]
-    Rejected { code: u16 },
+    Rejected {
+        /// SIP response status code from the rejecting party.
+        code: u16,
+    },
 
     /// Transfer failed.
     #[error("transfer failed: {0}")]

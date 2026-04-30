@@ -1,6 +1,5 @@
 [package]
 name = "rsiprtp-media"
-publish = false
 description = "Audio codecs, jitter buffer, and mixing"
 version.workspace = true
 edition.workspace = true

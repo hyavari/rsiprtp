@@ -1,6 +1,5 @@
 [package]
 name = "rsiprtp-transport"
-publish = false
 description = "Network transport layer for SIP (UDP/TCP/TLS)"
 version.workspace = true
 edition.workspace = true

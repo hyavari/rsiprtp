@@ -1,0 +1,88 @@
+# This file is the public API surface of the `rsiprtp` facade crate.
+#
+# It is a checked-in baseline so future PRs surface API changes in diffs.
+# Lines beginning with `#` are header comments; all other lines are produced
+# verbatim by `cargo public-api` (one item per line).
+#
+# Generated with:
+#     RUSTUP_TOOLCHAIN=nightly cargo public-api \
+#         --manifest-path crates/rsiprtp/Cargo.toml \
+#         --color never > crates/rsiprtp/public-api.txt
+#
+# Notes:
+# - `cargo public-api` requires a recent nightly rustdoc to emit JSON. On this
+#   machine `cargo install cargo-public-api --locked` succeeded and the tool
+#   was driven via `RUSTUP_TOOLCHAIN=nightly` (the default toolchain is stable,
+#   whose rustdoc does not produce JSON).
+# - This baseline shows only the *facade* re-exports (modules and `prelude`
+#   items). Each re-exported subcrate has its own internal API which is not
+#   walked here -- run cargo public-api against those crates if you need
+#   their per-crate surfaces.
+# - Regenerate after intentional public-API changes and review the diff in PR.
+#   Rerun the command above; commit the updated file alongside the change.
+#
+# Tooling versions used to generate this file:
+#   cargo-public-api 0.51.0
+#   nightly toolchain: nightly-x86_64-pc-windows-msvc
+#       (rustc 1.97.0-nightly, build date 2026-04-24)
+#
+# ----- begin cargo-public-api output -----
+pub mod rsiprtp
+pub use rsiprtp::core
+pub use rsiprtp::dialog
+pub use rsiprtp::media
+pub use rsiprtp::rtp
+pub use rsiprtp::sdp
+pub use rsiprtp::session
+pub use rsiprtp::sip
+pub use rsiprtp::transaction
+pub use rsiprtp::transport
+pub mod rsiprtp::prelude
+pub use rsiprtp::prelude::Call
+pub use rsiprtp::prelude::CallConfig
+pub use rsiprtp::prelude::CallDirection
+pub use rsiprtp::prelude::CallEndReason
+pub use rsiprtp::prelude::CallEvent
+pub use rsiprtp::prelude::CallId
+pub use rsiprtp::prelude::CallManager
+pub use rsiprtp::prelude::CallState
+pub use rsiprtp::prelude::Codec
+pub use rsiprtp::prelude::CodecConfig
+pub use rsiprtp::prelude::Dialog
+pub use rsiprtp::prelude::DialogId
+pub use rsiprtp::prelude::DigestChallenge
+pub use rsiprtp::prelude::DigestCredentials
+pub use rsiprtp::prelude::DigestResponse
+pub use rsiprtp::prelude::Direction
+pub use rsiprtp::prelude::Error
+pub use rsiprtp::prelude::G711Codec
+pub use rsiprtp::prelude::G711Variant
+pub use rsiprtp::prelude::JitterBuffer
+pub use rsiprtp::prelude::JitterBufferConfig
+pub use rsiprtp::prelude::ManagerConfig
+pub use rsiprtp::prelude::ManagerEvent
+pub use rsiprtp::prelude::MediaDescription
+pub use rsiprtp::prelude::MediaSession
+pub use rsiprtp::prelude::Method
+pub use rsiprtp::prelude::NegotiatedMedia
+pub use rsiprtp::prelude::PlayoutDecision
+pub use rsiprtp::prelude::ReceiverReport
+pub use rsiprtp::prelude::RegistrationConfig
+pub use rsiprtp::prelude::RegistrationError
+pub use rsiprtp::prelude::RegistrationManager
+pub use rsiprtp::prelude::RegistrationState
+pub use rsiprtp::prelude::Result
+pub use rsiprtp::prelude::RtcpCompound
+pub use rsiprtp::prelude::RtpPacket
+pub use rsiprtp::prelude::RtpSession
+pub use rsiprtp::prelude::SdpBuilder
+pub use rsiprtp::prelude::SenderReport
+pub use rsiprtp::prelude::SessionDescription
+pub use rsiprtp::prelude::SipMessage
+pub use rsiprtp::prelude::SipRequest
+pub use rsiprtp::prelude::SipResponse
+pub use rsiprtp::prelude::StackConfig
+pub use rsiprtp::prelude::UdpTransport
+pub use rsiprtp::prelude::generate_branch
+pub use rsiprtp::prelude::generate_call_id
+pub use rsiprtp::prelude::generate_tag

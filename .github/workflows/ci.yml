@@ -50,9 +50,9 @@ jobs:
       - name: Build
         run: cargo build --workspace --exclude gabby
       - name: Test
-        # --test-threads=1 works around a pre-existing test-isolation bug in
-        # the force_*_error tests under transport/ice (shared AtomicU64 flags
-        # leak between parallel tests). All 2780 tests pass serially.
+        # --test-threads=1 — residual flake in turn::tests::test_turn_client_new_forced_local_addr_error
+        # under parallel execution. Forced-error tests use thread-id-keyed flags but
+        # runtime worker thread reuse can still cause occasional cross-test contamination.
         run: cargo test --workspace --exclude gabby -- --test-threads=1
 
   doc:
@@ -66,6 +66,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo doc --workspace --exclude gabby --no-deps
 
+  msrv:
+    name: MSRV (Rust 1.75)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.75.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace --exclude gabby --locked
+
   audit:
     name: cargo-audit
     runs-on: ubuntu-latest
@@ -74,3 +83,10 @@ jobs:
       - uses: rustsec/audit-check@v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2

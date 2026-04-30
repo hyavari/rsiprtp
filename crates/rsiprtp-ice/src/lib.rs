@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! STUN/ICE implementation for NAT traversal.
 //!
 //! This crate provides:

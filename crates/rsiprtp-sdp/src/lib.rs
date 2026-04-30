@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! SDP (Session Description Protocol) handling.
 //!
 //! Implements SDP parsing, building, and the offer/answer model per RFC 3264.

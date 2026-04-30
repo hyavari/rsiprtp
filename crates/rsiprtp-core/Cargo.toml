@@ -1,6 +1,5 @@
 [package]
 name = "rsiprtp-core"
-publish = false
 description = "Core types, errors, and configuration for rsiprtp SIP/RTP stack"
 version.workspace = true
 edition.workspace = true

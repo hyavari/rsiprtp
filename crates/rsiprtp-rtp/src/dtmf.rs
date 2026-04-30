@@ -7,21 +7,37 @@ use bytes::{BufMut, BytesMut};
 /// DTMF digit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DtmfDigit {
+    /// DTMF "0" — keypad zero.
     Zero,
+    /// DTMF "1" — keypad one.
     One,
+    /// DTMF "2" — keypad two.
     Two,
+    /// DTMF "3" — keypad three.
     Three,
+    /// DTMF "4" — keypad four.
     Four,
+    /// DTMF "5" — keypad five.
     Five,
+    /// DTMF "6" — keypad six.
     Six,
+    /// DTMF "7" — keypad seven.
     Seven,
+    /// DTMF "8" — keypad eight.
     Eight,
+    /// DTMF "9" — keypad nine.
     Nine,
+    /// DTMF "*" — star (asterisk) key.
     Star,
+    /// DTMF "#" — pound (hash) key.
     Pound,
+    /// DTMF "A" — auxiliary tone (military auto-dial column).
     A,
+    /// DTMF "B" — auxiliary tone (military auto-dial column).
     B,
+    /// DTMF "C" — auxiliary tone (military auto-dial column).
     C,
+    /// DTMF "D" — auxiliary tone (military auto-dial column).
     D,
 }
 

@@ -1,6 +1,5 @@
 [package]
 name = "rsiprtp-rtp"
-publish = false
 description = "RTP/RTCP packet handling"
 version.workspace = true
 edition.workspace = true

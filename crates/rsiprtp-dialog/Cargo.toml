@@ -1,6 +1,5 @@
 [package]
 name = "rsiprtp-dialog"
-publish = false
 description = "SIP dialog management (Sans-IO)"
 version.workspace = true
 edition.workspace = true

@@ -36,18 +36,28 @@ const AF_IPV6: u8 = 0x02;
 /// STUN errors.
 #[derive(Error, Debug)]
 pub enum StunError {
+    /// Underlying network I/O error.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// STUN request timed out before any response arrived.
     #[error("Request timeout")]
     Timeout,
 
+    /// Server returned a malformed or unparseable STUN message.
     #[error("Invalid response: {0}")]
     InvalidResponse(String),
 
+    /// Server returned an error response (RFC 5389 §15.6 ERROR-CODE).
     #[error("STUN error response: {code} {reason}")]
-    ErrorResponse { code: u16, reason: String },
+    ErrorResponse {
+        /// Numeric STUN error code (e.g. 401 Unauthorized).
+        code: u16,
+        /// Human-readable reason phrase from the server.
+        reason: String,
+    },
 
+    /// Binding response lacked a MAPPED-ADDRESS / XOR-MAPPED-ADDRESS attribute.
     #[error("No mapped address in response")]
     NoMappedAddress,
 }

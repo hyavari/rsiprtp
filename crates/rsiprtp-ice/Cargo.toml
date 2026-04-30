@@ -1,6 +1,5 @@
 [package]
 name = "rsiprtp-ice"
-publish = false
 description = "STUN/ICE implementation for NAT traversal"
 version.workspace = true
 edition.workspace = true

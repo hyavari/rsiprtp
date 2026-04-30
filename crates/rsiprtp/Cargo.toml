@@ -1,10 +1,21 @@
 [package]
 name = "rsiprtp"
-description = "SIP/RTP stack for Rust - VoIP and AI agent applications"
+description = "Modular SIP/RTP communications stack for Rust with Sans-IO state machines"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/rsiprtp"
+readme = "../../README.md"
+keywords = ["sip", "rtp", "voip", "telephony", "sans-io"]
+categories = ["network-programming", "multimedia"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
 rsiprtp-core.workspace = true

@@ -14,7 +14,7 @@ use crate::traits::{IncomingMessage, OutgoingMessage, TransportProtocol};
 
 #[cfg(test)]
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicU64, Ordering},
     LazyLock, Mutex as StdMutex,
 };
 
@@ -25,29 +25,35 @@ pub const MAX_UDP_SIZE: usize = 65535;
 /// Recommended MTU-safe size for SIP over UDP.
 pub const MTU_SAFE_SIZE: usize = 1300;
 
+// Forced-error flags use thread-id-keyed storage so parallel tests can each
+// arm a forced error on their own thread without disturbing siblings. A flag
+// is "armed" when its value equals the arming thread's `current_thread_id()`;
+// only that thread will then consume it. Zero means "not set".
 #[cfg(test)]
-static FORCE_RECV_ERROR: AtomicBool = AtomicBool::new(false);
+static FORCE_RECV_ERROR: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
-static FORCE_BIND_ERROR: AtomicBool = AtomicBool::new(false);
+static FORCE_BIND_ERROR: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
-static FORCE_LOCAL_ADDR_ERROR: AtomicBool = AtomicBool::new(false);
+static FORCE_LOCAL_ADDR_ERROR: AtomicU64 = AtomicU64::new(0);
+// FORCE_SEND_ERROR_DEST keys on the destination SocketAddr, not thread id;
+// each test uses a unique bound port so this is already isolated.
 #[cfg(test)]
 static FORCE_SEND_ERROR_DEST: LazyLock<StdMutex<Option<SocketAddr>>> =
     LazyLock::new(|| StdMutex::new(None));
 
 #[cfg(test)]
 fn force_recv_error_once() {
-    FORCE_RECV_ERROR.store(true, Ordering::SeqCst);
+    FORCE_RECV_ERROR.store(current_thread_id(), Ordering::SeqCst);
 }
 
 #[cfg(test)]
 fn force_bind_error_once() {
-    FORCE_BIND_ERROR.store(true, Ordering::SeqCst);
+    FORCE_BIND_ERROR.store(current_thread_id(), Ordering::SeqCst);
 }
 
 #[cfg(test)]
 fn force_local_addr_error_once() {
-    FORCE_LOCAL_ADDR_ERROR.store(true, Ordering::SeqCst);
+    FORCE_LOCAL_ADDR_ERROR.store(current_thread_id(), Ordering::SeqCst);
 }
 
 #[cfg(test)]
@@ -68,11 +74,34 @@ fn take_forced_send_error(dest: SocketAddr) -> Option<std::io::Error> {
 }
 
 #[cfg(test)]
-fn take_forced_error(flag: &AtomicBool, message: &str) -> Option<std::io::Error> {
-    if flag.swap(false, Ordering::SeqCst) {
+fn take_forced_error(flag: &AtomicU64, message: &str) -> Option<std::io::Error> {
+    let current = current_thread_id();
+    if flag.load(Ordering::SeqCst) == current
+        && flag
+            .compare_exchange(current, 0, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    {
         Some(std::io::Error::other(message))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+fn current_thread_id() -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::thread::current().id().hash(&mut hasher);
+    normalize_thread_id(hasher.finish())
+}
+
+#[cfg(test)]
+fn normalize_thread_id(id: u64) -> u64 {
+    if id == 0 {
+        1
+    } else {
+        id
     }
 }
 
@@ -185,10 +214,8 @@ impl UdpTransport {
             loop {
                 let recv_result = async {
                     #[cfg(test)]
-                    {
-                        if FORCE_RECV_ERROR.swap(false, Ordering::SeqCst) {
-                            return Err(std::io::Error::other("forced recv error"));
-                        }
+                    if let Some(err) = take_forced_error(&FORCE_RECV_ERROR, "forced recv error") {
+                        return Err(err);
                     }
                     recv_socket.recv_from(&mut buf).await
                 }

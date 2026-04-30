@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Network transport layer for SIP signaling.
 //!
 //! Provides UDP, TCP, and TLS transports for SIP messages.

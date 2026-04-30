@@ -64,24 +64,41 @@ const AF_IPV6: u8 = 0x02;
 /// TURN errors.
 #[derive(Error, Debug)]
 pub enum TurnError {
+    /// Underlying network I/O error.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// TURN request timed out before any response arrived.
     #[error("Request timeout")]
     Timeout,
 
+    /// Server returned a malformed or unparseable TURN message.
     #[error("Invalid response: {0}")]
     InvalidResponse(String),
 
+    /// Server returned a TURN error response (RFC 5766 §15.6).
     #[error("TURN error: {code} {reason}")]
-    ErrorResponse { code: u16, reason: String },
+    ErrorResponse {
+        /// Numeric TURN error code (e.g. 401 Unauthorized, 437 Allocation Mismatch).
+        code: u16,
+        /// Human-readable reason phrase from the server.
+        reason: String,
+    },
 
+    /// Server demanded credentials — first request must be retried with auth.
     #[error("Authentication required")]
-    AuthRequired { realm: String, nonce: String },
+    AuthRequired {
+        /// Authentication realm advertised by the server.
+        realm: String,
+        /// Server-supplied nonce for the upcoming authenticated request.
+        nonce: String,
+    },
 
+    /// Allocation succeeded but no XOR-RELAYED-ADDRESS was returned.
     #[error("No relay address in response")]
     NoRelayAddress,
 
+    /// Operation requires an active allocation, but none exists yet.
     #[error("Allocation not active")]
     NotAllocated,
 }

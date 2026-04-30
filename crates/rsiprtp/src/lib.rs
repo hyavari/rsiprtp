@@ -1,3 +1,4 @@
+#![deny(missing_docs)]
 //! rsiprtp - SIP/RTP stack for Rust
 //!
 //! A production-ready SIP/RTP communications stack designed for:

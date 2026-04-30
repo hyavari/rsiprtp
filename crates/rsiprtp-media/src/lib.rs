@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Audio processing: codecs, jitter buffer, mixing, and file I/O.
 
 pub mod codec;

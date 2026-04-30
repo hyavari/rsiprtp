@@ -22,7 +22,7 @@ use tracing::{debug, error, trace, warn};
 use crate::traits::{IncomingMessage, OutgoingMessage, TransportProtocol};
 
 #[cfg(test)]
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Maximum SIP message size over TLS.
 pub const MAX_TLS_SIZE: usize = 65536;
@@ -30,71 +30,112 @@ pub const MAX_TLS_SIZE: usize = 65536;
 /// Initial buffer size for reading.
 const INITIAL_BUF_SIZE: usize = 4096;
 
+// Forced-error flags use thread-id-keyed storage so parallel tests can each
+// arm a forced error on their own thread without disturbing siblings. A flag
+// is "armed" when its value equals the arming thread's `current_thread_id()`;
+// only that thread will then consume it. Zero means "not set".
+//
+// FORCE_ACCEPT_ERROR has three variants — we use one flag per variant rather
+// than packing variant + thread id together; cleaner and equally cheap.
 #[cfg(test)]
-static FORCE_ACCEPT_ERROR: AtomicU8 = AtomicU8::new(0);
+static FORCE_ACCEPT_ERROR_V1: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
-static FORCE_WRITE_ERROR: AtomicU8 = AtomicU8::new(0);
+static FORCE_ACCEPT_ERROR_V2: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
-static FORCE_FLUSH_ERROR: AtomicU8 = AtomicU8::new(0);
+static FORCE_ACCEPT_ERROR_V3: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
-static FORCE_BIND_ERROR: AtomicU8 = AtomicU8::new(0);
+static FORCE_WRITE_ERROR: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
-static FORCE_LOCAL_ADDR_ERROR: AtomicU8 = AtomicU8::new(0);
+static FORCE_FLUSH_ERROR: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static FORCE_BIND_ERROR: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static FORCE_LOCAL_ADDR_ERROR: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(test)]
 fn force_accept_error_once() {
-    FORCE_ACCEPT_ERROR.store(1, Ordering::SeqCst);
+    FORCE_ACCEPT_ERROR_V1.store(current_thread_id(), Ordering::SeqCst);
 }
 
 #[cfg(test)]
 fn force_accept_error_other_message_once() {
-    FORCE_ACCEPT_ERROR.store(2, Ordering::SeqCst);
+    FORCE_ACCEPT_ERROR_V2.store(current_thread_id(), Ordering::SeqCst);
 }
 
 #[cfg(test)]
 fn force_accept_error_other_kind_once() {
-    FORCE_ACCEPT_ERROR.store(3, Ordering::SeqCst);
+    FORCE_ACCEPT_ERROR_V3.store(current_thread_id(), Ordering::SeqCst);
 }
 
 #[cfg(test)]
 fn force_write_error_once() {
-    FORCE_WRITE_ERROR.store(1, Ordering::SeqCst);
+    FORCE_WRITE_ERROR.store(current_thread_id(), Ordering::SeqCst);
 }
 
 #[cfg(test)]
 fn force_flush_error_once() {
-    FORCE_FLUSH_ERROR.store(1, Ordering::SeqCst);
+    FORCE_FLUSH_ERROR.store(current_thread_id(), Ordering::SeqCst);
 }
 
 #[cfg(test)]
 fn force_bind_error_once() {
-    FORCE_BIND_ERROR.store(1, Ordering::SeqCst);
+    FORCE_BIND_ERROR.store(current_thread_id(), Ordering::SeqCst);
 }
 
 #[cfg(test)]
 fn force_local_addr_error_once() {
-    FORCE_LOCAL_ADDR_ERROR.store(1, Ordering::SeqCst);
+    FORCE_LOCAL_ADDR_ERROR.store(current_thread_id(), Ordering::SeqCst);
+}
+
+#[cfg(test)]
+fn try_take(flag: &AtomicU64) -> bool {
+    let current = current_thread_id();
+    flag.load(Ordering::SeqCst) == current
+        && flag
+            .compare_exchange(current, 0, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
 }
 
 #[cfg(test)]
 fn take_forced_accept_error() -> Option<std::io::Error> {
-    match FORCE_ACCEPT_ERROR.swap(0, Ordering::SeqCst) {
-        1 => Some(std::io::Error::other("forced accept error")),
-        2 => Some(std::io::Error::other("forced accept error other")),
-        3 => Some(std::io::Error::new(
+    if try_take(&FORCE_ACCEPT_ERROR_V1) {
+        Some(std::io::Error::other("forced accept error"))
+    } else if try_take(&FORCE_ACCEPT_ERROR_V2) {
+        Some(std::io::Error::other("forced accept error other"))
+    } else if try_take(&FORCE_ACCEPT_ERROR_V3) {
+        Some(std::io::Error::new(
             std::io::ErrorKind::ConnectionAborted,
             "forced accept error",
-        )),
-        _ => None,
+        ))
+    } else {
+        None
     }
 }
 
 #[cfg(test)]
-fn take_forced_error(flag: &AtomicU8, message: &str) -> Option<std::io::Error> {
-    if flag.swap(0, Ordering::SeqCst) == 1 {
+fn take_forced_error(flag: &AtomicU64, message: &str) -> Option<std::io::Error> {
+    if try_take(flag) {
         Some(std::io::Error::other(message))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+fn current_thread_id() -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::thread::current().id().hash(&mut hasher);
+    normalize_thread_id(hasher.finish())
+}
+
+#[cfg(test)]
+fn normalize_thread_id(id: u64) -> u64 {
+    if id == 0 {
+        1
+    } else {
+        id
     }
 }
 

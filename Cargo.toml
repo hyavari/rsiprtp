@@ -36,8 +36,11 @@ default-members = [
 [workspace.package]
 version = "0.2.0"
 edition = "2021"
+rust-version = "1.75"
 license = "MIT OR Apache-2.0"
 authors = ["Martin Davidson <martingdavidson@gmail.com>"]
+repository = "https://github.com/0x4D44/rsiprtp"
+homepage = "https://github.com/0x4D44/rsiprtp"
 
 [workspace.dependencies]
 # Async runtime
@@ -92,15 +95,16 @@ sha1 = "0.10"
 sha2 = "0.10"
 base64 = "0.22"
 
-# Internal crates
-rsiprtp-core = { path = "crates/rsiprtp-core" }
-rsiprtp-sip = { path = "crates/rsiprtp-sip" }
-rsiprtp-transaction = { path = "crates/rsiprtp-transaction" }
-rsiprtp-dialog = { path = "crates/rsiprtp-dialog" }
-rsiprtp-transport = { path = "crates/rsiprtp-transport" }
-rsiprtp-sdp = { path = "crates/rsiprtp-sdp" }
-rsiprtp-rtp = { path = "crates/rsiprtp-rtp" }
-rsiprtp-srtp = { path = "crates/rsiprtp-srtp" }
-rsiprtp-ice = { path = "crates/rsiprtp-ice" }
-rsiprtp-media = { path = "crates/rsiprtp-media" }
-rsiprtp-session = { path = "crates/rsiprtp-session" }
+# Internal crates — versions match workspace.package.version so all 11
+# crates publish atomically. Bump the workspace version when releasing.
+rsiprtp-core = { path = "crates/rsiprtp-core", version = "0.2.0" }
+rsiprtp-sip = { path = "crates/rsiprtp-sip", version = "0.2.0" }
+rsiprtp-transaction = { path = "crates/rsiprtp-transaction", version = "0.2.0" }
+rsiprtp-dialog = { path = "crates/rsiprtp-dialog", version = "0.2.0" }
+rsiprtp-transport = { path = "crates/rsiprtp-transport", version = "0.2.0" }
+rsiprtp-sdp = { path = "crates/rsiprtp-sdp", version = "0.2.0" }
+rsiprtp-rtp = { path = "crates/rsiprtp-rtp", version = "0.2.0" }
+rsiprtp-srtp = { path = "crates/rsiprtp-srtp", version = "0.2.0" }
+rsiprtp-ice = { path = "crates/rsiprtp-ice", version = "0.2.0" }
+rsiprtp-media = { path = "crates/rsiprtp-media", version = "0.2.0" }
+rsiprtp-session = { path = "crates/rsiprtp-session", version = "0.2.0" }

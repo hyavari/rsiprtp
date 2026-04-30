@@ -21,7 +21,9 @@ fn cover_none_case() {}
 /// SIP message (either request or response).
 #[derive(Debug, Clone)]
 pub enum SipMessage {
+    /// A SIP request (INVITE, REGISTER, BYE, ...).
     Request(SipRequest),
+    /// A SIP response (1xx-6xx status).
     Response(SipResponse),
 }
 
@@ -460,21 +462,34 @@ impl SipResponse {
 /// SIP method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Method {
+    /// INVITE — initiates a session (RFC 3261 §13).
     Invite,
+    /// ACK — confirms receipt of a final response to INVITE (RFC 3261 §17).
     Ack,
+    /// BYE — terminates an established session (RFC 3261 §15).
     Bye,
+    /// CANCEL — cancels an in-flight request (RFC 3261 §9).
     Cancel,
+    /// REGISTER — binds a contact address to an address-of-record (RFC 3261 §10).
     Register,
+    /// OPTIONS — queries a peer's capabilities (RFC 3261 §11).
     Options,
+    /// PRACK — provisional response acknowledgement (RFC 3262).
     Prack,
+    /// SUBSCRIBE — requests notification of an event package (RFC 3265/6665).
     Subscribe,
+    /// NOTIFY — delivers an event-package notification to a subscriber (RFC 3265/6665).
     Notify,
+    /// PUBLISH — publishes event state to a server (RFC 3903).
     Publish,
+    /// INFO — sends mid-dialog application information (RFC 6086).
     Info,
+    /// REFER — asks the recipient to issue a request to a third party (RFC 3515).
     Refer,
+    /// MESSAGE — carries an instant message payload (RFC 3428).
     Message,
+    /// UPDATE — modifies session state without affecting dialog state (RFC 3311).
     Update,
-    Other,
 }
 
 impl Method {
@@ -495,7 +510,6 @@ impl Method {
             Method::Refer => rsip::Method::Refer,
             Method::Message => rsip::Method::Message,
             Method::Update => rsip::Method::Update,
-            Method::Other => rsip::Method::Invite, // fallback
         }
     }
 
@@ -548,7 +562,6 @@ impl fmt::Display for Method {
             Method::Refer => "REFER",
             Method::Message => "MESSAGE",
             Method::Update => "UPDATE",
-            Method::Other => "OTHER",
         };
         write!(f, "{}", s)
     }
@@ -1564,7 +1577,6 @@ Content-Length: 0\r\n\
         assert_eq!(format!("{}", Method::Refer), "REFER");
         assert_eq!(format!("{}", Method::Message), "MESSAGE");
         assert_eq!(format!("{}", Method::Update), "UPDATE");
-        assert_eq!(format!("{}", Method::Other), "OTHER");
     }
 
     #[test]
@@ -1598,8 +1610,6 @@ Content-Length: 0\r\n\
         assert_eq!(Method::Refer.to_rsip(), rsip::Method::Refer);
         assert_eq!(Method::Message.to_rsip(), rsip::Method::Message);
         assert_eq!(Method::Update.to_rsip(), rsip::Method::Update);
-        // Other falls back to Invite
-        assert_eq!(Method::Other.to_rsip(), rsip::Method::Invite);
     }
 
     #[test]

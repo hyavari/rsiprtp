@@ -240,10 +240,6 @@ fn test_method_conversions_for_coverage() {
     assert_eq!(update.to_string(), "UPDATE");
     assert_eq!(Method::from(&update), Method::Update);
 
-    let other = Method::Other.to_rsip();
-    assert_eq!(other.to_string(), "INVITE");
-    assert_eq!(Method::from(&other), Method::Invite);
-
     assert_eq!(format!("{}", Method::Ack), "ACK");
     assert_eq!(format!("{}", Method::Prack), "PRACK");
     assert_eq!(format!("{}", Method::Subscribe), "SUBSCRIBE");
@@ -253,7 +249,6 @@ fn test_method_conversions_for_coverage() {
     assert_eq!(format!("{}", Method::Refer), "REFER");
     assert_eq!(format!("{}", Method::Message), "MESSAGE");
     assert_eq!(format!("{}", Method::Update), "UPDATE");
-    assert_eq!(format!("{}", Method::Other), "OTHER");
 }
 
 #[test]

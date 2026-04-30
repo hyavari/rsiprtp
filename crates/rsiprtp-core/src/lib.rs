@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Core types, errors, and configuration for the rsiprtp SIP/RTP stack.
 
 pub mod config;

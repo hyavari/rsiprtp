@@ -62,12 +62,16 @@ pub struct ExtensionHeader {
 /// RTP parse error.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum RtpParseError {
+    /// Buffer too short to contain a valid RTP packet header (12 bytes minimum).
     #[error("Packet too short: {0} bytes")]
     TooShort(usize),
+    /// RTP version field is not 2 (the only version defined by RFC 3550).
     #[error("Invalid RTP version: {0}")]
     InvalidVersion(u8),
+    /// Extension header is declared but the buffer is truncated before its end.
     #[error("Extension header truncated")]
     ExtensionTruncated,
+    /// Declared payload extends past the end of the buffer.
     #[error("Payload truncated")]
     PayloadTruncated,
 }

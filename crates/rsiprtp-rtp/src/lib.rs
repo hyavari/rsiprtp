@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! RTP/RTCP packet handling per RFC 3550.
 //!
 //! # Overview

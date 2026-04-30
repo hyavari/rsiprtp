@@ -79,11 +79,14 @@ pub struct Candidate {
 /// Transport protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Transport {
+    /// User Datagram Protocol — the common case for ICE candidates.
     Udp,
+    /// Transmission Control Protocol — used by ICE-TCP (RFC 6544).
     Tcp,
 }
 
 impl Transport {
+    /// Return the SDP token for this transport (`"UDP"` or `"TCP"`).
     pub fn as_str(&self) -> &'static str {
         match self {
             Transport::Udp => "UDP",

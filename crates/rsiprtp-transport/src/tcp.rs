@@ -18,7 +18,7 @@ use crate::traits::{IncomingMessage, OutgoingMessage, TransportProtocol};
 
 #[cfg(test)]
 use std::sync::{
-    atomic::{AtomicU8, Ordering},
+    atomic::{AtomicU64, Ordering},
     LazyLock, Mutex as StdMutex,
 };
 
@@ -28,53 +28,64 @@ pub const MAX_TCP_SIZE: usize = 65536;
 /// Initial buffer size for reading.
 const INITIAL_BUF_SIZE: usize = 4096;
 
+// Forced-error flags use thread-id-keyed storage so parallel tests can each
+// arm a forced error on their own thread without disturbing siblings. A flag
+// is "armed" when its value equals the arming thread's `current_thread_id()`;
+// only that thread will then consume it. Zero means "not set".
+//
+// FORCE_ACCEPT_ERROR has three variants — we use one flag per variant rather
+// than packing variant + thread id together; cleaner and equally cheap.
 #[cfg(test)]
-static FORCE_ACCEPT_ERROR: AtomicU8 = AtomicU8::new(0);
+static FORCE_ACCEPT_ERROR_V1: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
-static FORCE_READ_ERROR: AtomicU8 = AtomicU8::new(0);
+static FORCE_ACCEPT_ERROR_V2: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
-static FORCE_WRITE_ERROR: AtomicU8 = AtomicU8::new(0);
+static FORCE_ACCEPT_ERROR_V3: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
-static FORCE_BIND_ERROR: AtomicU8 = AtomicU8::new(0);
+static FORCE_READ_ERROR: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
-static FORCE_LOCAL_ADDR_ERROR: AtomicU8 = AtomicU8::new(0);
+static FORCE_WRITE_ERROR: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static FORCE_BIND_ERROR: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static FORCE_LOCAL_ADDR_ERROR: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
 static FORCE_SKIP_CONNECT_INSERT: LazyLock<StdMutex<Option<SocketAddr>>> =
     LazyLock::new(|| StdMutex::new(None));
 
 #[cfg(test)]
 fn force_accept_error_once() {
-    FORCE_ACCEPT_ERROR.store(1, Ordering::SeqCst);
+    FORCE_ACCEPT_ERROR_V1.store(current_thread_id(), Ordering::SeqCst);
 }
 
 #[cfg(test)]
 fn force_accept_error_other_message_once() {
-    FORCE_ACCEPT_ERROR.store(2, Ordering::SeqCst);
+    FORCE_ACCEPT_ERROR_V2.store(current_thread_id(), Ordering::SeqCst);
 }
 
 #[cfg(test)]
 fn force_accept_error_other_kind_once() {
-    FORCE_ACCEPT_ERROR.store(3, Ordering::SeqCst);
+    FORCE_ACCEPT_ERROR_V3.store(current_thread_id(), Ordering::SeqCst);
 }
 
 #[cfg(test)]
 fn force_read_error_once() {
-    FORCE_READ_ERROR.store(1, Ordering::SeqCst);
+    FORCE_READ_ERROR.store(current_thread_id(), Ordering::SeqCst);
 }
 
 #[cfg(test)]
 fn force_write_error_once() {
-    FORCE_WRITE_ERROR.store(1, Ordering::SeqCst);
+    FORCE_WRITE_ERROR.store(current_thread_id(), Ordering::SeqCst);
 }
 
 #[cfg(test)]
 fn force_bind_error_once() {
-    FORCE_BIND_ERROR.store(1, Ordering::SeqCst);
+    FORCE_BIND_ERROR.store(current_thread_id(), Ordering::SeqCst);
 }
 
 #[cfg(test)]
 fn force_local_addr_error_once() {
-    FORCE_LOCAL_ADDR_ERROR.store(1, Ordering::SeqCst);
+    FORCE_LOCAL_ADDR_ERROR.store(current_thread_id(), Ordering::SeqCst);
 }
 
 #[cfg(test)]
@@ -95,24 +106,54 @@ fn take_skip_connect_insert_for(dest: SocketAddr) -> bool {
 }
 
 #[cfg(test)]
+fn try_take(flag: &AtomicU64) -> bool {
+    let current = current_thread_id();
+    flag.load(Ordering::SeqCst) == current
+        && flag
+            .compare_exchange(current, 0, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+}
+
+#[cfg(test)]
 fn take_forced_accept_error() -> Option<std::io::Error> {
-    match FORCE_ACCEPT_ERROR.swap(0, Ordering::SeqCst) {
-        1 => Some(std::io::Error::other("forced accept error")),
-        2 => Some(std::io::Error::other("forced accept error other")),
-        3 => Some(std::io::Error::new(
+    if try_take(&FORCE_ACCEPT_ERROR_V1) {
+        Some(std::io::Error::other("forced accept error"))
+    } else if try_take(&FORCE_ACCEPT_ERROR_V2) {
+        Some(std::io::Error::other("forced accept error other"))
+    } else if try_take(&FORCE_ACCEPT_ERROR_V3) {
+        Some(std::io::Error::new(
             std::io::ErrorKind::ConnectionAborted,
             "forced accept error",
-        )),
-        _ => None,
+        ))
+    } else {
+        None
     }
 }
 
 #[cfg(test)]
-fn take_forced_error(flag: &AtomicU8, message: &str) -> Option<std::io::Error> {
-    if flag.swap(0, Ordering::SeqCst) == 1 {
+fn take_forced_error(flag: &AtomicU64, message: &str) -> Option<std::io::Error> {
+    if try_take(flag) {
         Some(std::io::Error::other(message))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+fn current_thread_id() -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::thread::current().id().hash(&mut hasher);
+    normalize_thread_id(hasher.finish())
+}
+
+#[cfg(test)]
+fn normalize_thread_id(id: u64) -> u64 {
+    if id == 0 {
+        1
+    } else {
+        id
     }
 }
 
@@ -537,7 +578,7 @@ impl TcpSender {
 mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
-    use std::sync::atomic::{AtomicU8, Ordering};
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Once};
 
     fn init_tracing() {
@@ -550,7 +591,7 @@ mod tests {
         });
     }
 
-    async fn wait_for_forced_accept_error_clear_inner(flag: &AtomicU8) {
+    async fn wait_for_forced_accept_error_clear_inner(flag: &AtomicU64) {
         for _ in 0..20 {
             if flag.load(Ordering::SeqCst) == 0 {
                 return;
@@ -560,8 +601,16 @@ mod tests {
         panic!("forced accept error not consumed");
     }
 
-    async fn wait_for_forced_accept_error_clear() {
-        wait_for_forced_accept_error_clear_inner(&FORCE_ACCEPT_ERROR).await;
+    async fn wait_for_forced_accept_error_v1_clear() {
+        wait_for_forced_accept_error_clear_inner(&FORCE_ACCEPT_ERROR_V1).await;
+    }
+
+    async fn wait_for_forced_accept_error_v2_clear() {
+        wait_for_forced_accept_error_clear_inner(&FORCE_ACCEPT_ERROR_V2).await;
+    }
+
+    async fn wait_for_forced_accept_error_v3_clear() {
+        wait_for_forced_accept_error_clear_inner(&FORCE_ACCEPT_ERROR_V3).await;
     }
 
     // Constants tests
@@ -820,7 +869,7 @@ mod tests {
         let server = TcpTransport::bind(server_addr).await.unwrap();
 
         let (_rx, _sender) = server.start();
-        wait_for_forced_accept_error_clear().await;
+        wait_for_forced_accept_error_v1_clear().await;
     }
 
     #[tokio::test]
@@ -831,7 +880,7 @@ mod tests {
         let server = TcpTransport::bind(server_addr).await.unwrap();
 
         let (_rx, _sender) = server.start();
-        wait_for_forced_accept_error_clear().await;
+        wait_for_forced_accept_error_v2_clear().await;
     }
 
     #[tokio::test]
@@ -842,12 +891,12 @@ mod tests {
         let server = TcpTransport::bind(server_addr).await.unwrap();
 
         let (_rx, _sender) = server.start();
-        wait_for_forced_accept_error_clear().await;
+        wait_for_forced_accept_error_v3_clear().await;
     }
 
     #[tokio::test]
     async fn test_wait_for_forced_accept_error_clear_panics() {
-        let flag = Arc::new(AtomicU8::new(1));
+        let flag = Arc::new(AtomicU64::new(1));
         let flag_handle = flag.clone();
         let handle = tokio::spawn(async move {
             wait_for_forced_accept_error_clear_inner(&flag_handle).await;

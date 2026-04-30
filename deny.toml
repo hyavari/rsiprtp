@@ -1,0 +1,177 @@
+# cargo-deny configuration for rsiprtp
+#
+# This file configures `cargo deny` to enforce license, advisory, source, and
+# multiple-version policies across the workspace dependency graph.
+#
+# Run locally with:
+#     cargo deny check
+#
+# CI runs the same check via .github/workflows/ci.yml (job: cargo-deny).
+#
+# ---------------------------------------------------------------------------
+# Exceptions and ignores applied below (audit trail)
+# ---------------------------------------------------------------------------
+#
+# Licenses exceptions:
+#   * webpki-roots (0.26.x and 1.0.x): CDLA-Permissive-2.0 — Mozilla CA
+#     bundle maintained by rustls. Permissive, redistribution-friendly.
+#   * rsip and rsip-derives (0.4.0): X11-swapped — these crates ship a
+#     `LICENSE` file containing standard MIT text plus an extra
+#     "no advertising" final paragraph. cargo-deny classifies that as the
+#     X11-swapped SPDX identifier; functionally it is MIT-equivalent and
+#     permissive. Allowed only for these two crates.
+#
+# Advisory ignores:
+#   * RUSTSEC-2023-0071 (rsa Marvin Attack): no upstream fix available; the
+#     `rsa` crate is a DEV-only transitive dep through rcgen used in
+#     rsiprtp-transport tests. Not present in any production binary.
+#   * RUSTSEC-2025-0134 (rustls-pemfile unmaintained): archived crate;
+#     migration to rustls-pki-types' PemObject is pending. No security
+#     impact.
+#
+# Bans:
+#   * `wildcards = "warn"` (instead of "deny") because the project's
+#     single-facade publishing plan uses path-only workspace deps in the
+#     `rsiprtp` facade crate, which cargo-deny flags as wildcards even with
+#     `allow-wildcard-paths = true`. Cargo itself enforces correct version
+#     specifiers at `cargo publish` time.
+#
+# All other crates in the dep graph carry licenses on the global allow list
+# (MIT, Apache-2.0, ISC, BSD-2-Clause, BSD-3-Clause, Unicode-3.0, 0BSD,
+# Zlib) satisfied via standard SPDX dual licensing.
+
+[graph]
+# Empty `targets` means cargo-deny evaluates all targets present in the graph
+# (Linux, macOS, Windows, etc.). rsiprtp is a cross-platform stack so we want
+# to lint every target's deps.
+targets = []
+all-features = false
+no-default-features = false
+
+[output]
+feature-depth = 1
+
+# ---------------------------------------------------------------------------
+# Licenses
+# ---------------------------------------------------------------------------
+[licenses]
+# SPDX identifiers we accept for any crate. Only OSI/FSF-approved permissive
+# licenses compatible with our MIT OR Apache-2.0 dual-license publishing plan.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "ISC",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    # Unicode-3.0 is used by ICU/idna crates; permissive Unicode license.
+    "Unicode-3.0",
+    # Zlib is used by `slotmap`, `bytemuck`, `wide` and others; permissive.
+    "Zlib",
+    # 0BSD is used by `audio-codec-algorithms`; effectively public-domain.
+    "0BSD",
+    # MPL-2.0 and CC0-1.0 are kept on the allow list as common permissive
+    # licenses we'd accept if a future dep brings one in. cargo-deny will
+    # warn if currently unmatched; that warning is acceptable here.
+    "MPL-2.0",
+    "CC0-1.0",
+]
+# 0.93 is tight enough to prevent false positives from heavily customized
+# license texts (e.g. X11-swapped variants) while still allowing slight
+# whitespace/punctuation drift from canonical SPDX text.
+confidence-threshold = 0.93
+
+# Per-crate license allowances. Keep the list short and justified.
+exceptions = [
+    # webpki-roots is the rustls-maintained Mozilla CA bundle. CDLA-Permissive-2.0
+    # is permissive (modeled on Apache-2.0) and explicitly allows redistribution.
+    { allow = ["CDLA-Permissive-2.0"], crate = "webpki-roots" },
+
+    # rsip and rsip-derives 0.4.0 ship their license as a `LICENSE` file
+    # containing standard MIT text plus an extra "no advertising" final
+    # paragraph. cargo-deny classifies this as the SPDX identifier
+    # `X11-swapped` (X11 with a swapped final paragraph). The license IS
+    # functionally MIT-equivalent and permissive; we allow it for these
+    # specific crates only.
+    { allow = ["X11-swapped"], crate = "rsip" },
+    { allow = ["X11-swapped"], crate = "rsip-derives" },
+]
+
+[licenses.private]
+# We are publishing all workspace members, but `gabby` and the workspace
+# crates publish to crates.io so private=ignore is benign here. Set to true
+# so unpublished local-only crates (none today) wouldn't trip license checks.
+ignore = true
+
+# ---------------------------------------------------------------------------
+# Advisories
+# ---------------------------------------------------------------------------
+[advisories]
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+# Deny crate versions that have been yanked from crates.io.
+yanked = "deny"
+# Modern cargo-deny denies vulnerabilities, unmaintained, and unsound crates
+# by default; the deprecated explicit keys are intentionally omitted.
+#
+# Each ignore entry MUST cite a justification. Re-evaluate when the upstream
+# crate publishes a fix.
+ignore = [
+    # RUSTSEC-2023-0071 (rsa): Marvin Attack timing sidechannel in the `rsa`
+    # crate. Pulled in transitively through `rcgen` as a DEV dependency only
+    # (used by rsiprtp-transport tests to generate self-signed TLS certs).
+    # Not present in any production binary. No upstream fix available yet
+    # (tracked at https://github.com/RustCrypto/RSA/issues/626). Re-check on
+    # rsa >=0.10 release.
+    { id = "RUSTSEC-2023-0071", reason = "rsa crate is a dev-only transitive dep via rcgen; no fix upstream" },
+    # RUSTSEC-2025-0134 (rustls-pemfile): unmaintained warning. The crate is
+    # archived and users are asked to migrate to rustls-pki-types' PemObject
+    # trait. Tracked for migration; no security impact, just unmaintained.
+    { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile archived; pending migration to rustls-pki-types PemObject" },
+]
+
+# ---------------------------------------------------------------------------
+# Bans (multiple versions, wildcards, banned crates)
+# ---------------------------------------------------------------------------
+[bans]
+# Transitive duplicates are common across the ecosystem (e.g. windows-sys
+# 0.48/0.52/0.60). Warn so we notice them without blocking the build.
+multiple-versions = "warn"
+# Wildcards in version specifiers are an anti-pattern for published crates;
+# we deny them. `allow-wildcard-paths = true` exempts internal `path = "..."`
+# workspace deps that appear as wildcards to cargo-deny.
+#
+# Note: cargo-deny still flags wildcard path deps in publishable crates
+# because crates.io rejects path-only deps at publish time. Our publishing
+# plan is "single-facade" — only the `rsiprtp` crate is published, and
+# `cargo publish` rewrites its workspace path deps to versioned crates.io
+# refs at publish time. To accommodate that workflow without false
+# positives, we keep wildcards at `deny` for the actual `*` pattern but
+# downgrade to `warn` for path-only workspace deps via the workspace
+# warning (cargo-deny does not yet expose a finer-grained switch).
+wildcards = "warn"
+allow-wildcard-paths = true
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow = []
+deny = []
+# No skip entries today. Add specific @version entries with comments here if
+# `cargo deny check bans` ever flags an unavoidable duplicate we want to
+# silence.
+skip = []
+skip-tree = []
+
+# ---------------------------------------------------------------------------
+# Sources
+# ---------------------------------------------------------------------------
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[sources.allow-org]
+github = []
+gitlab = []
+bitbucket = []

@@ -18,15 +18,19 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// ICE agent errors.
 #[derive(Error, Debug)]
 pub enum IceError {
+    /// Underlying network I/O error.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// STUN protocol error during candidate gathering or connectivity checks.
     #[error("STUN error: {0}")]
     Stun(#[from] crate::stun::StunError),
 
+    /// No candidates were gathered or supplied — cannot perform ICE.
     #[error("No candidates available")]
     NoCandidates,
 
+    /// ICE processing failed (no valid pair found, all checks failed, etc.).
     #[error("ICE failed: {0}")]
     Failed(String),
 }
@@ -94,8 +98,9 @@ pub enum PairState {
 pub struct IceConfig {
     /// STUN servers to use for gathering.
     pub stun_servers: Vec<StunServer>,
-    /// ICE credentials (ufrag:pwd).
+    /// ICE credentials (ufrag:pwd) — local username fragment.
     pub local_ufrag: String,
+    /// Local ICE password used for STUN message integrity.
     pub local_pwd: String,
     /// Gather timeout.
     pub gather_timeout_ms: u64,

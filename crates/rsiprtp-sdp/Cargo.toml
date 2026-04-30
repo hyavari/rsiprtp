@@ -1,6 +1,5 @@
 [package]
 name = "rsiprtp-sdp"
-publish = false
 description = "SDP parsing and offer/answer model"
 version.workspace = true
 edition.workspace = true

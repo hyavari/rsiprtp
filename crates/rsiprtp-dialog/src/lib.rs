@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! SIP dialog management.
 //!
 //! Implements dialog state machines for INVITE-initiated sessions per RFC 3261.

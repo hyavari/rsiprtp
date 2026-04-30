@@ -1,6 +1,5 @@
 [package]
 name = "rsiprtp-srtp"
-publish = false
 description = "SRTP encryption for secure RTP media"
 version.workspace = true
 edition.workspace = true

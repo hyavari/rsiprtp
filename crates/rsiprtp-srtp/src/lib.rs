@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! SRTP (Secure Real-time Transport Protocol) implementation.
 //!
 //! Implements RFC 3711 (SRTP) and RFC 4568 (SDES for key exchange).

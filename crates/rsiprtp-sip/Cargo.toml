@@ -1,6 +1,5 @@
 [package]
 name = "rsiprtp-sip"
-publish = false
 description = "SIP message parsing and building for rsiprtp"
 version.workspace = true
 edition.workspace = true

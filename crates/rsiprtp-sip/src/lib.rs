@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! SIP message parsing and building for rsiprtp.
 //!
 //! This crate wraps the `rsip` crate and provides convenience methods
