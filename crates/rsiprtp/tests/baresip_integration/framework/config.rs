@@ -183,7 +183,7 @@ fn find_available_even_port() -> u16 {
         drop(socket);
 
         // RTP uses even ports
-        if port % 2 == 0 {
+        if port.is_multiple_of(2) {
             return port;
         }
     }

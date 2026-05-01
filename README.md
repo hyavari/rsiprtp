@@ -3,7 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/rsiprtp.svg)](https://crates.io/crates/rsiprtp)
 [![docs.rs](https://img.shields.io/docsrs/rsiprtp)](https://docs.rs/rsiprtp)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
-[![MSRV](https://img.shields.io/badge/rustc-1.75+-orange.svg)](#installation)
+[![MSRV](https://img.shields.io/badge/rustc-1.88+-orange.svg)](#installation)
 
 > A modular SIP/RTP communications stack for Rust. Built around Sans-IO state
 > machines for transactions and dialogs, with batteries-included transports,
@@ -85,7 +85,7 @@ rsiprtp = "0.2"
 tokio   = { version = "1", features = ["full"] }
 ```
 
-MSRV: **Rust 1.75**.
+MSRV: **Rust 1.88**.
 
 ## What's not included (yet)
 
