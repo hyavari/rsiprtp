@@ -35,12 +35,6 @@ audio-codec-algorithms = "0.7"
 ezk-g722 = "0.1"
 ropus = "0.12"
 
-# Audio processing
-dasp = { version = "0.11", features = ["signal", "slice", "ring_buffer"] }
-
-# Concurrency
-crossbeam = "0.8"
-
 # Error handling
 thiserror = "1"
 
