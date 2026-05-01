@@ -6,12 +6,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::session::call::{
-    Call, CallConfig, CallDirection, CallEndReason, CallEvent, CallId, CallState, Dialog,
-};
 use crate::dialog::DialogId;
 use crate::sdp::negotiation::{create_answer, process_answer, Codec};
 use crate::sdp::parser::SessionDescription;
+use crate::session::call::{
+    Call, CallConfig, CallDirection, CallEndReason, CallEvent, CallId, CallState, Dialog,
+};
 
 /// Manager event for the application layer.
 #[derive(Debug)]

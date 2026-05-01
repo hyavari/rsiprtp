@@ -3,8 +3,8 @@
 //! Provides secure TLS transport for SIP messages (SIPS).
 //! Uses rustls for TLS implementation.
 
-use bytes::{Bytes, BytesMut};
 use crate::core::Result;
+use bytes::{Bytes, BytesMut};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use rustls::{ClientConfig, RootCertStore, ServerConfig};
 use std::collections::HashMap;

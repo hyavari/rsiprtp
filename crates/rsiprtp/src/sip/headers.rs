@@ -3,8 +3,8 @@
 //! This module provides typed wrappers for common SIP headers,
 //! making it easier to extract and manipulate header values.
 
-use crate::sip::uri::SipUri;
 use crate::core::SipError;
+use crate::sip::uri::SipUri;
 use std::fmt;
 
 /// Typed wrapper for Via header (RFC 3261 Section 20.42).

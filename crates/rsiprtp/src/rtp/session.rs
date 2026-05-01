@@ -2,8 +2,8 @@
 //!
 //! Manages RTP packet sending and receiving for a media stream.
 
-use crate::rtp::packet::{sequence_diff, RtpPacket};
 use crate::core::{random_u16, random_u32};
+use crate::rtp::packet::{sequence_diff, RtpPacket};
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -574,7 +574,11 @@ impl RtpSession {
     }
 
     /// Create an RTCP compound packet (SR + SDES or RR + SDES).
-    pub fn create_rtcp_compound(&self, cname: &str, is_sender: bool) -> crate::rtp::rtcp::RtcpCompound {
+    pub fn create_rtcp_compound(
+        &self,
+        cname: &str,
+        is_sender: bool,
+    ) -> crate::rtp::rtcp::RtcpCompound {
         use crate::rtp::rtcp::RtcpCompound;
 
         if is_sender {

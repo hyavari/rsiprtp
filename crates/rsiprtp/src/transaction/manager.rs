@@ -3,12 +3,12 @@
 //! The manager tracks active client and server transactions, routes incoming
 //! messages to the appropriate transaction, and handles transaction timeouts.
 
+use crate::sip::{Method, SipMessage, SipRequest, SipResponse};
 use crate::transaction::client::invite::{InviteClientTransaction, TransactionId};
 use crate::transaction::client::non_invite::NonInviteClientTransaction;
 use crate::transaction::server::invite::InviteServerTransaction;
 use crate::transaction::server::non_invite::NonInviteServerTransaction;
 use crate::transaction::timer::Timer;
-use crate::sip::{Method, SipMessage, SipRequest, SipResponse};
 use std::collections::HashMap;
 use std::time::Duration;
 

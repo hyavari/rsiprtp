@@ -356,7 +356,9 @@ impl IceAgent {
         // Parse response (simplified)
         let data = &buf[..len];
         if data.len() < 20 {
-            return Err(crate::ice::stun::StunError::InvalidResponse("Too short".into()));
+            return Err(crate::ice::stun::StunError::InvalidResponse(
+                "Too short".into(),
+            ));
         }
 
         let mut buf = data;
@@ -370,7 +372,9 @@ impl IceAgent {
         let msg_len = buf.get_u16() as usize;
         let cookie = buf.get_u32();
         if cookie != MAGIC_COOKIE {
-            return Err(crate::ice::stun::StunError::InvalidResponse("Bad cookie".into()));
+            return Err(crate::ice::stun::StunError::InvalidResponse(
+                "Bad cookie".into(),
+            ));
         }
 
         // Skip transaction ID check for simplicity

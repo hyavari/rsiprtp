@@ -1,8 +1,8 @@
 //! SIP message types and wrappers.
 
+use crate::core::{Result, SipError};
 use bytes::Bytes;
 use rsip::prelude::*;
-use crate::core::{Result, SipError};
 use std::convert::TryFrom;
 use std::fmt;
 

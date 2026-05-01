@@ -37,8 +37,8 @@
 //!       +-------------------+
 //! ```
 
-use crate::transaction::timer::{Timer, TimerValues};
 use crate::sip::{Method, SipRequest, SipResponse, Via};
+use crate::transaction::timer::{Timer, TimerValues};
 use std::time::Duration;
 
 /// Transaction ID for matching responses to requests.

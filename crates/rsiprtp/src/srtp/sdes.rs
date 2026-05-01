@@ -148,7 +148,10 @@ fn parse_key_params(s: &str) -> Result<ParsedKeyParams, String> {
             // supported AES-CM crypto suites. Bound the shift to avoid
             // a debug-build overflow panic for attacker-controlled exponents.
             if exp > 48 {
-                return Err(format!("Lifetime exponent {} exceeds RFC 4568 max of 48", exp));
+                return Err(format!(
+                    "Lifetime exponent {} exceeds RFC 4568 max of 48",
+                    exp
+                ));
             }
             lifetime = Some(1u64 << exp);
         } else if part.contains(':') {

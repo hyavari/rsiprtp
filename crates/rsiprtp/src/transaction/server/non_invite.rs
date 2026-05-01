@@ -40,9 +40,9 @@
 //!         +-------------------+
 //! ```
 
+use crate::sip::{Method, SipRequest, SipResponse};
 use crate::transaction::client::invite::TransactionId;
 use crate::transaction::timer::{Timer, TimerValues};
-use crate::sip::{Method, SipRequest, SipResponse};
 use std::time::Duration;
 
 /// State of the non-INVITE server transaction.

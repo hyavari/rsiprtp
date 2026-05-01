@@ -4,8 +4,8 @@
 //! TCP is used when SIP messages exceed MTU size or when reliable
 //! transport is required.
 
-use bytes::{Bytes, BytesMut};
 use crate::core::Result;
+use bytes::{Bytes, BytesMut};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;

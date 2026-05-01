@@ -17,4 +17,3 @@ pub trait AdaptiveBitrate {
     /// Apply a target bitrate in bits per second.
     fn set_target_bitrate_bps(&mut self, bps: u32) -> Result<(), String>;
 }
-

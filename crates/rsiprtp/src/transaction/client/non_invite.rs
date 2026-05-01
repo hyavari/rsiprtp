@@ -37,8 +37,8 @@
 //! ```
 
 use super::invite::TransactionId;
-use crate::transaction::timer::{Timer, TimerValues};
 use crate::sip::{Method, SipRequest, SipResponse};
+use crate::transaction::timer::{Timer, TimerValues};
 use std::time::Duration;
 
 /// State of the non-INVITE client transaction.

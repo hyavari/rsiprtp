@@ -4,11 +4,11 @@
 
 use std::net::IpAddr;
 
+use crate::core::random_u64;
 use crate::sdp::parser::{
     Attribute, Connection, Direction, MediaDescription, MediaType, Origin, SessionDescription,
     Timing,
 };
-use crate::core::random_u64;
 
 /// Builder for SDP session descriptions.
 #[derive(Debug, Clone)]

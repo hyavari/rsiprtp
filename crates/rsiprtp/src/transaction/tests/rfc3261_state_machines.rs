@@ -4,6 +4,7 @@
 //! RFC 3261 requirements for client and server transactions, including all state
 //! transitions, timer behaviors, and message handling.
 
+use crate::sip::{Method, SipRequest, SipResponse};
 use crate::transaction::client::invite::{
     Action as InviteClientAction, Event as InviteClientEvent, InviteClientTransaction,
     State as InviteClientState,
@@ -19,7 +20,6 @@ use crate::transaction::server::non_invite::{
     Action as NonInviteServerAction, NonInviteServerTransaction, State as NonInviteServerState,
 };
 use crate::transaction::timer::Timer;
-use crate::sip::{Method, SipRequest, SipResponse};
 
 // Helper functions
 fn create_invite() -> SipRequest {

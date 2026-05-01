@@ -2,8 +2,8 @@
 //!
 //! Provides asynchronous UDP socket for SIP message transport.
 
-use bytes::Bytes;
 use crate::core::Result;
+use bytes::Bytes;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
