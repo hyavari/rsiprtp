@@ -115,6 +115,12 @@ impl CallManager {
     }
 
     /// Create a new outbound call.
+    ///
+    /// `remote_uri` is stored for later use in SIP requests; this method does
+    /// **not** resolve the URI to a network address. The manager is Sans-IO
+    /// and does not perform DNS or socket I/O. Resolve the URI yourself with
+    /// [`SipResolver`](crate::transport::SipResolver) (RFC 3263 NAPTR / SRV /
+    /// A) before connecting your transport.
     pub fn create_call(&mut self, remote_uri: String) -> CallId {
         let call = Call::new_outbound(self.call_config.clone(), remote_uri);
         let call_id = call.id().clone();

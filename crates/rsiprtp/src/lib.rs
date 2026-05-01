@@ -1,9 +1,14 @@
 #![deny(missing_docs)]
 //! rsiprtp - SIP/RTP stack for Rust
 //!
-//! A production-ready SIP/RTP communications stack designed for:
+//! An audio-focused SIP user-agent (UA) stack designed for:
 //! - Voicemail applications
 //! - AI agent call bridges with mixing
+//!
+//! `rsiprtp` targets traditional VoIP / SIP-trunking use cases. It is **not**
+//! a WebRTC stack: there is no DTLS-SRTP handshake (only SDES key exchange),
+//! no video, and no SIP-over-WebSocket transport. See the README for the
+//! full scope.
 //!
 //! # Quick Start
 //!
@@ -89,5 +94,5 @@ pub mod prelude {
     pub use crate::dialog::DialogId;
 
     // Transport
-    pub use crate::transport::UdpTransport;
+    pub use crate::transport::{ResolvedTarget, SipResolver, TransportProtocol, UdpTransport};
 }

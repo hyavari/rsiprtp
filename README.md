@@ -6,30 +6,43 @@
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 [![MSRV](https://img.shields.io/badge/rustc-1.88+-orange.svg)](#installation)
 
-> A modular SIP/RTP communications stack for Rust, built around **Sans-IO**
+> An audio-focused SIP user-agent stack for Rust, built around **Sans-IO**
 > state machines (pure logic that emits actions instead of doing network I/O)
 > for transactions and dialogs, with batteries-included transports, media,
 > and high-level call management for VoIP, telephony, and AI voice agents.
+>
+> Targets traditional SIP / VoIP. **Not a WebRTC stack** — see [Scope](#scope).
 
 ## Features
 
 **Signaling**
-- SIP message parsing and building (RFC 3261), digest authentication
-- Sans-IO transaction state machines (INVITE / non-INVITE, client and server)
-- INVITE dialog management
+- SIP message parsing and building (RFC 3261)
+- Digest authentication, including SHA-256 (RFC 7616)
+- Sans-IO transaction state machines — all four of RFC 3261 §17 (INVITE
+  client / server, non-INVITE client / server) with the full timer set
+- INVITE dialog management with route sets, early dialogs, and target refresh
 - SDP offer/answer negotiation (RFC 3264) and SDP construction
+- Call hold / resume via re-INVITE with direction changes (`sendrecv` ↔
+  `sendonly` / `inactive`)
+- Blind and attended call transfer (REFER, RFC 3515; Replaces, RFC 3891)
+- Registration with digest challenge handling and periodic refresh
 
 **Media**
-- RTP send/receive with sequence and timestamp handling, RTCP SR/RR
-- DTMF (RFC 4733) events
-- G.711 (PCMU/PCMA), G.722, and Opus codecs
-- Adaptive jitter buffer with playout decisions
+- RTP send/receive with sequence and timestamp handling
+- RTCP SR / RR / SDES / BYE / APP, with `rtcp-mux` support (RFC 5761)
+- DTMF (RFC 4733) telephone-event
+- G.711 (PCMU/PCMA), G.722, and Opus codecs (Opus inband FEC supported)
+- Adaptive jitter buffer with reorder, duplicate, and late-arrival detection
+- N-way mixer with active-speaker tracking for conference scenarios
 
 **Transport and security**
 - UDP, TCP, and TLS transports built on Tokio
-- SRTP encryption with SDES key exchange (DTLS-SRTP: framing only)
-- ICE / STUN / TURN building blocks (not yet wired into `CallManager` —
-  see [Scope](#scope))
+- RFC 3263 SIP URI resolution (NAPTR / SRV / A) via [`SipResolver`]
+- SRTP encryption with SDES key exchange (RFC 3711 + RFC 4568)
+- ICE / STUN / TURN building blocks (RFC 8445 / 5389 / 5766) — exposed as
+  libraries; not yet wired into `CallManager` (see [Scope](#scope))
+
+[`SipResolver`]: https://docs.rs/rsiprtp/latest/rsiprtp/transport/struct.SipResolver.html
 
 **Architecture**
 - Single crate organized into focused modules with a flat `prelude`
@@ -115,17 +128,22 @@ INVITE call flow, see [ARCHITECTURE.md](ARCHITECTURE.md).
 ## Scope
 
 `rsiprtp` is a **user-agent (UA) stack** focused on placing and answering
-audio calls. The following are deliberately out of scope or not yet
-implemented; if you need any of these, please open an issue first:
+audio calls over traditional SIP. The following are deliberately out of
+scope or not yet implemented; if you need any of these, please open an
+issue first:
 
-- Server roles: REGISTER server / location service, B2BUA, proxy, registrar
-- Event packages: SUBSCRIBE / NOTIFY, PUBLISH, presence, BLF
-- REFER / call transfer flows
-- MESSAGE / SIMPLE / MSRP messaging
-- SIP over WebSocket (RFC 7118)
-- ICE end-to-end through `CallManager` (the building blocks exist; the
-  high-level glue is still in progress)
-- Video codecs and FEC
+- **WebRTC interop.** DTLS-SRTP is present as framing types only — the DTLS
+  handshake itself is not implemented. SRTP is reachable via SDES key
+  exchange, which works against SIP carriers but not against browsers.
+- **Server roles**: REGISTER server / location service, B2BUA, proxy, registrar.
+- **Event packages**: SUBSCRIBE / NOTIFY / PUBLISH carry method-level message
+  support only — no event-state machines, presence, BLF, or MWI.
+- **MESSAGE / SIMPLE / MSRP** messaging.
+- **SIP over WebSocket** (RFC 7118).
+- **ICE end-to-end through `CallManager`.** The agent / STUN / TURN libraries
+  are complete and usable directly, but the glue that generates SDP
+  candidates and drives connectivity checks from the call layer is not done.
+- **Video codecs** and FEC (RED / ULPFEC / RTX).
 
 ## Status
 

@@ -102,7 +102,30 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let socket = UdpSocket::bind(local_addr).await?;
     println!("Bound to {}", socket.local_addr()?);
 
-    let server_addr: SocketAddr = format!("{}:{}", config.server, config.port).parse()?;
+    // Resolve the server. If the user supplied a literal IP we keep the
+    // configured port; otherwise we use RFC 3263 (NAPTR/SRV/A) via
+    // SipResolver and let DNS pick the port.
+    let server_addr: SocketAddr = if let Ok(ip) = config.server.parse::<IpAddr>() {
+        SocketAddr::new(ip, config.port)
+    } else {
+        let resolver = SipResolver::new().await?;
+        let targets = resolver
+            .resolve(&config.server, Some(TransportProtocol::Udp))
+            .await?;
+        let target = targets
+            .first()
+            .ok_or_else(|| format!("no DNS records for {}", config.server))?;
+        let ip = target
+            .addresses
+            .first()
+            .copied()
+            .ok_or_else(|| format!("no A/AAAA for SRV target {}", target.host))?;
+        println!(
+            "Resolved {} -> {}:{} (transport={:?})",
+            config.server, ip, target.port, target.transport
+        );
+        SocketAddr::new(ip, target.port)
+    };
     socket.connect(&server_addr).await?;
 
     // Create registration manager
