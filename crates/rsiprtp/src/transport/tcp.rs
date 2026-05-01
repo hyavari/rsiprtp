@@ -9,11 +9,15 @@ use bytes::{Bytes, BytesMut};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing::{debug, error, trace, warn};
 
+use crate::transport::keepalive::{
+    strip_leading_keepalives, KeepAliveConfig, KEEPALIVE_PING, KEEPALIVE_PONG,
+};
 use crate::transport::traits::{IncomingMessage, OutgoingMessage, TransportProtocol};
 
 #[cfg(test)]
@@ -166,6 +170,9 @@ struct TcpConnection {
     remote_addr: SocketAddr,
     /// Read buffer.
     read_buf: BytesMut,
+    /// When we last sent a CRLF keep-alive ping; `None` until the
+    /// first one fires.
+    last_ping_sent: Option<Instant>,
 }
 
 impl TcpConnection {
@@ -174,22 +181,60 @@ impl TcpConnection {
             stream,
             remote_addr,
             read_buf: BytesMut::with_capacity(INITIAL_BUF_SIZE),
+            last_ping_sent: None,
         }
     }
 
     /// Read a complete SIP message from the connection.
     ///
-    /// SIP over TCP uses Content-Length header for framing.
-    async fn read_message(&mut self) -> Result<Option<Bytes>> {
+    /// SIP over TCP uses Content-Length header for framing. CRLF
+    /// keep-alive frames per RFC 5626 §3.5.1 are stripped from the
+    /// stream and answered with a pong; if `keepalive.send_pings` is
+    /// set, periodic outbound pings are emitted while waiting for data.
+    async fn read_message(&mut self, keepalive: &KeepAliveConfig) -> Result<Option<Bytes>> {
         loop {
-            // Try to parse a complete message from the buffer
+            // Strip any leading keep-alive frames already buffered and
+            // reply with one pong per ping.
+            let pings = strip_leading_keepalives(&mut self.read_buf);
+            for _ in 0..pings {
+                stream_write_all(&mut self.stream, KEEPALIVE_PONG).await?;
+                trace!("Sent CRLF pong to {}", self.remote_addr);
+            }
+
+            // Try to parse a complete message from the buffer.
             if let Some(msg) = self.try_parse_message() {
                 return Ok(Some(msg));
             }
 
-            // Need more data
+            // Need more data. If keep-alive pings are enabled, race the
+            // read against the ping deadline so the timer fires even
+            // when the peer is silent.
             let mut temp_buf = [0u8; 4096];
-            let n = stream_read(&mut self.stream, &mut temp_buf).await?;
+            let read_result = if keepalive.send_pings {
+                let last = self.last_ping_sent.unwrap_or_else(Instant::now);
+                let elapsed = last.elapsed();
+                let remaining = keepalive
+                    .ping_interval
+                    .checked_sub(elapsed)
+                    .unwrap_or_default();
+                tokio::time::timeout(remaining, stream_read(&mut self.stream, &mut temp_buf))
+                    .await
+                    .ok()
+            } else {
+                Some(stream_read(&mut self.stream, &mut temp_buf).await)
+            };
+
+            let n = match read_result {
+                Some(Ok(n)) => n,
+                Some(Err(e)) => return Err(e.into()),
+                None => {
+                    // Ping deadline elapsed — send `\r\n\r\n` and loop.
+                    stream_write_all(&mut self.stream, KEEPALIVE_PING).await?;
+                    self.last_ping_sent = Some(Instant::now());
+                    trace!("Sent CRLF ping to {}", self.remote_addr);
+                    continue;
+                }
+            };
 
             if n == 0 {
                 // Connection closed
@@ -313,6 +358,10 @@ pub struct TcpTransport {
     connections: Arc<RwLock<HashMap<SocketAddr, Arc<Mutex<TcpConnection>>>>>,
     /// Channel sender for incoming messages.
     incoming_tx: Option<mpsc::Sender<IncomingMessage>>,
+    /// CRLF keep-alive configuration (RFC 5626 §3.5.1). Disabled by
+    /// default to preserve existing behaviour; opt in via
+    /// [`with_keepalive`](Self::with_keepalive).
+    keepalive: KeepAliveConfig,
 }
 
 impl TcpTransport {
@@ -329,6 +378,7 @@ impl TcpTransport {
             listener: Some(listener),
             connections: Arc::new(RwLock::new(HashMap::new())),
             incoming_tx: None,
+            keepalive: KeepAliveConfig::default(),
         })
     }
 
@@ -339,7 +389,19 @@ impl TcpTransport {
             listener: None,
             connections: Arc::new(RwLock::new(HashMap::new())),
             incoming_tx: None,
+            keepalive: KeepAliveConfig::default(),
         }
+    }
+
+    /// Configure CRLF keep-alive (RFC 5626 §3.5.1) for this transport.
+    ///
+    /// Incoming pings (`\r\n\r\n`) are answered with a pong (`\r\n`)
+    /// regardless of this setting. When [`KeepAliveConfig::send_pings`]
+    /// is true, the read loop also emits outbound pings on each
+    /// connection at the configured interval to keep NAT pinholes open.
+    pub fn with_keepalive(mut self, keepalive: KeepAliveConfig) -> Self {
+        self.keepalive = keepalive;
+        self
     }
 
     /// Get the local address.
@@ -409,11 +471,13 @@ impl TcpTransport {
 
         let connections = self.connections.clone();
         let listener = self.listener.take();
+        let keepalive = self.keepalive.clone();
 
         // Spawn accept loop if we have a listener
         if let Some(listener) = listener {
             let tx_clone = tx.clone();
             let connections_clone = connections.clone();
+            let keepalive_clone = keepalive.clone();
 
             tokio::spawn(async move {
                 loop {
@@ -444,8 +508,9 @@ impl TcpTransport {
                             // Spawn read loop for this connection
                             let tx = tx_clone.clone();
                             let conns = connections_clone.clone();
+                            let ka = keepalive_clone.clone();
                             tokio::spawn(async move {
-                                Self::read_loop(conn_arc, remote_addr, tx, conns).await;
+                                Self::read_loop(conn_arc, remote_addr, tx, conns, ka).await;
                             });
                         }
                         Err(e) => {
@@ -465,6 +530,7 @@ impl TcpTransport {
         // Start read loops for existing connections
         let tx_clone = tx;
         let connections_clone = connections.clone();
+        let keepalive_existing = keepalive;
         tokio::spawn(async move {
             let conns = connections_clone.read().await;
             for (addr, conn_arc) in conns.iter() {
@@ -472,8 +538,9 @@ impl TcpTransport {
                 let addr = *addr;
                 let conn_arc = conn_arc.clone();
                 let conns = connections_clone.clone();
+                let ka = keepalive_existing.clone();
                 tokio::spawn(async move {
-                    Self::read_loop(conn_arc, addr, tx, conns).await;
+                    Self::read_loop(conn_arc, addr, tx, conns, ka).await;
                 });
             }
         });
@@ -491,11 +558,12 @@ impl TcpTransport {
         remote_addr: SocketAddr,
         tx: mpsc::Sender<IncomingMessage>,
         connections: Arc<RwLock<HashMap<SocketAddr, Arc<Mutex<TcpConnection>>>>>,
+        keepalive: KeepAliveConfig,
     ) {
         loop {
             let result = {
                 let mut conn = conn_arc.lock().await;
-                conn.read_message().await
+                conn.read_message(&keepalive).await
             };
 
             match result {
@@ -783,7 +851,11 @@ mod tests {
 
         let (stream, remote) = listener.accept().await.unwrap();
         let mut conn = TcpConnection::new(stream, remote);
-        let msg = conn.read_message().await.unwrap().unwrap();
+        let msg = conn
+            .read_message(&KeepAliveConfig::default())
+            .await
+            .unwrap()
+            .unwrap();
         assert!(msg.starts_with(b"INVITE"));
 
         conn.write_message(b"PONG").await.unwrap();
@@ -804,7 +876,7 @@ mod tests {
         let _client = client_task.await.unwrap();
 
         force_read_error_once();
-        let result = conn.read_message().await;
+        let result = conn.read_message(&KeepAliveConfig::default()).await;
         assert!(result.is_err());
     }
 
@@ -1911,5 +1983,94 @@ mod tests {
                 .unwrap();
             assert!(!received.data.is_empty());
         }
+    }
+
+    #[tokio::test]
+    async fn test_keepalive_ping_replied_with_pong() {
+        // Send a CRLF-CRLF ping straight at our read loop and verify
+        // we get a CRLF pong back without the ping being surfaced as a
+        // SIP message.
+        let server = TcpTransport::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
+            .await
+            .unwrap();
+        let server_addr = server.local_addr();
+        let (mut rx, _sender) = server.start();
+
+        let mut client = TcpStream::connect(server_addr).await.unwrap();
+        client.write_all(b"\r\n\r\n").await.unwrap();
+
+        // Read the pong (one CRLF).
+        let mut buf = [0u8; 8];
+        let n = tokio::time::timeout(std::time::Duration::from_secs(1), client.read(&mut buf))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&buf[..n], b"\r\n", "expected CRLF pong");
+
+        // Follow up with a real SIP message to confirm the connection
+        // is still parsing correctly after the keep-alive exchange.
+        let msg = b"INVITE sip:test@example.com SIP/2.0\r\nContent-Length: 0\r\n\r\n";
+        client.write_all(msg).await.unwrap();
+        let received = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&received.data[..], msg);
+    }
+
+    #[tokio::test]
+    async fn test_keepalive_outbound_ping_emitted() {
+        // With send_pings enabled and a tiny interval, the server's
+        // read loop should emit a CRLF-CRLF ping to the client even
+        // when the client never sends anything.
+        let server = TcpTransport::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
+            .await
+            .unwrap()
+            .with_keepalive(KeepAliveConfig::enabled_with_interval(
+                std::time::Duration::from_millis(50),
+            ));
+        let server_addr = server.local_addr();
+        let (_rx, _sender) = server.start();
+
+        let mut client = TcpStream::connect(server_addr).await.unwrap();
+        let mut buf = [0u8; 8];
+        let n = tokio::time::timeout(std::time::Duration::from_secs(1), client.read(&mut buf))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&buf[..n], b"\r\n\r\n", "expected CRLF-CRLF ping");
+    }
+
+    #[tokio::test]
+    async fn test_keepalive_leading_crlfs_before_message_are_consumed() {
+        // A real SIP request prefixed by stray CRLF/CRLF-CRLF runs
+        // (e.g. from a peer that pinged us mid-burst) must still parse
+        // cleanly per RFC 3261 §7.5.
+        let server = TcpTransport::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
+            .await
+            .unwrap();
+        let server_addr = server.local_addr();
+        let (mut rx, _sender) = server.start();
+
+        let mut client = TcpStream::connect(server_addr).await.unwrap();
+        // Two pings (CRLFCRLF + CRLFCRLF) followed by a real INVITE.
+        let payload =
+            b"\r\n\r\n\r\n\r\nINVITE sip:test@example.com SIP/2.0\r\nContent-Length: 0\r\n\r\n";
+        client.write_all(payload).await.unwrap();
+
+        let received = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(received.data.starts_with(b"INVITE"));
+        // We should also receive two pongs back.
+        let mut buf = [0u8; 8];
+        let n = tokio::time::timeout(std::time::Duration::from_secs(1), client.read(&mut buf))
+            .await
+            .unwrap()
+            .unwrap();
+        // Two pongs may arrive coalesced as `\r\n\r\n` or split.
+        assert!(n >= 2, "expected at least one CRLF pong, got {} bytes", n);
+        assert!(&buf[..n].starts_with(b"\r\n"));
     }
 }

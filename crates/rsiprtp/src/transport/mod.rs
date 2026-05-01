@@ -28,6 +28,7 @@
 //! # }
 //! ```
 
+pub(crate) mod keepalive;
 pub(crate) mod resolver;
 pub(crate) mod tcp;
 pub(crate) mod tls;
@@ -35,6 +36,7 @@ pub(crate) mod traits;
 pub(crate) mod udp;
 
 // Re-export main types
+pub use keepalive::{KeepAliveConfig, DEFAULT_PING_INTERVAL, KEEPALIVE_PING, KEEPALIVE_PONG};
 pub use resolver::{ResolvedTarget, ResolverError, SipResolver};
 pub use tcp::{TcpSender, TcpTransport, MAX_TCP_SIZE};
 pub use tls::{TlsClientConfig, TlsSender, TlsServerConfig, TlsTransport, MAX_TLS_SIZE};
