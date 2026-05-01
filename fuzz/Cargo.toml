@@ -136,3 +136,52 @@ path = "fuzz_targets/srtp_sdes.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "rtcp_compound"
+path = "fuzz_targets/rtcp_compound.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "srtp_unprotect"
+path = "fuzz_targets/srtp_unprotect.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "srtcp_unprotect"
+path = "fuzz_targets/srtcp_unprotect.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "g711_decode"
+path = "fuzz_targets/g711_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "g722_decode"
+path = "fuzz_targets/g722_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "opus_decode"
+path = "fuzz_targets/opus_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "jitter_push"
+path = "fuzz_targets/jitter_push.rs"
+test = false
+doc = false
+bench = false
