@@ -164,9 +164,15 @@ impl JitterBuffer {
         if let Some((last_time, last_ts)) = self.last_arrival {
             let arrival_diff = now.duration_since(last_time);
             let arrival_samples =
-                (arrival_diff.as_secs_f64() * self.config.clock_rate as f64) as i32;
+                (arrival_diff.as_secs_f64() * self.config.clock_rate as f64) as i64;
 
-            let ts_diff = timestamp.wrapping_sub(last_ts) as i32;
+            // Compute the relative-transit-time delta D(i-1, i) in i64 so the
+            // subtraction cannot overflow. ts_diff is the modular timestamp
+            // difference reinterpreted as a signed sample count, then widened
+            // to i64. Without the widening, an adversarial timestamp jump of
+            // 2^31 makes ts_diff = i32::MIN and `arrival_samples - ts_diff`
+            // overflows i32 in overflow-checked builds (e.g. cargo-fuzz).
+            let ts_diff = timestamp.wrapping_sub(last_ts) as i32 as i64;
             let d = (arrival_samples - ts_diff).unsigned_abs() as f64;
 
             // J(i) = J(i-1) + (|D(i-1,i)| - J(i-1))/16
@@ -1014,5 +1020,50 @@ mod tests {
 
         // Stats preserved across reset
         assert!(jb.stats().packets_received >= 2);
+    }
+
+    /// Regression test for fuzz crash `jitter_push-001`.
+    ///
+    /// A first packet with timestamp 0x80000000 followed by a packet with
+    /// timestamp 0 makes `timestamp.wrapping_sub(last_ts) as i32` evaluate to
+    /// i32::MIN. The historical implementation then computed
+    /// `arrival_samples - i32::MIN` in i32, which panics with
+    /// `attempt to subtract with overflow` in overflow-checked builds
+    /// (cargo-fuzz enables overflow checks even in release).
+    ///
+    /// Replays the exact 5-record sequence from the fuzz artifact plus a
+    /// hand-crafted minimal reproducer and verifies that no panic occurs.
+    #[test]
+    fn test_push_overflow_fuzz_001() {
+        // Replay the exact decoded sequence from
+        // fuzz/triage/jitter_push-001/crash.bin: five records
+        //   1) seq=1, ts=0x8000_0000, samples=[]
+        //   2) seq=0, ts=0,           samples=[]
+        //   3) seq=0, ts=0,           samples=[]
+        //   4) seq=0, ts=0,           samples=[]
+        //   5) seq=0, ts=0,           samples=[]
+        let mut jb = JitterBuffer::new(JitterBufferConfig::default());
+        let _ = jb.push(1, 0x8000_0000, Vec::new());
+        let _ = jb.push(0, 0, Vec::new());
+        let _ = jb.push(0, 0, Vec::new());
+        let _ = jb.push(0, 0, Vec::new());
+        let _ = jb.push(0, 0, Vec::new());
+        // If we got here without panicking, the i32 subtraction is safe.
+
+        // Boundary timestamps: 0 -> u32::MAX -> u32::MAX/2 -> 0 transitions.
+        let mut jb = JitterBuffer::new(JitterBufferConfig::default());
+        let samples = vec![0i16; 160];
+        // Forward jump of 0x8000_0000 (i32::MIN as wrapping diff).
+        let _ = jb.push(0, 0, samples.clone());
+        let _ = jb.push(1, 0x8000_0000, samples.clone());
+        // Backward jump of 0x8000_0000.
+        let _ = jb.push(2, 0, samples.clone());
+        // Wrap around through u32::MAX.
+        let _ = jb.push(3, u32::MAX, samples.clone());
+        let _ = jb.push(4, 0, samples.clone());
+        let _ = jb.push(5, u32::MAX / 2, samples.clone());
+        let _ = jb.push(6, u32::MAX / 2 + 1, samples);
+        // Reaching here means none of the modular timestamp deltas tripped
+        // the overflow path in the RFC 3550 jitter calculation.
     }
 }
