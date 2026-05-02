@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/rsiprtp",
     "crates/gabby",
+    "tools/full_test",
 ]
 # gabby is excluded from default builds because it requires the Vosk native
 # library. Build it explicitly with `cargo build -p gabby` once VOSK_LIB_DIR

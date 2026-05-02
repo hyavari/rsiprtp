@@ -618,6 +618,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "full_test"
+version = "0.3.0"
+dependencies = [
+ "chrono",
+]
+
+[[package]]
 name = "futures"
 version = "0.3.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
