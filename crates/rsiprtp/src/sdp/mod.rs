@@ -27,6 +27,7 @@
 //! ```
 
 pub mod builder;
+pub mod ice_attrs;
 pub mod negotiation;
 pub mod parser;
 

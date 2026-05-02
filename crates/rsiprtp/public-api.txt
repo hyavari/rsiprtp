@@ -2697,6 +2697,7 @@ pub fn rsiprtp::ice::IceAgent::new(config: rsiprtp::ice::IceConfig, role: rsiprt
 pub async fn rsiprtp::ice::IceAgent::remote_credentials(&self) -> core::option::Option<(alloc::string::String, alloc::string::String)>
 pub async fn rsiprtp::ice::IceAgent::selected_pair(&self) -> core::option::Option<rsiprtp::ice::CandidatePair>
 pub async fn rsiprtp::ice::IceAgent::set_remote_credentials(&self, ufrag: &str, pwd: &str)
+pub async fn rsiprtp::ice::IceAgent::socket_for(&self, addr: core::net::socket_addr::SocketAddr) -> core::option::Option<alloc::sync::Arc<tokio::net::udp::UdpSocket>>
 pub async fn rsiprtp::ice::IceAgent::start_checks(&self) -> core::result::Result<(), rsiprtp::ice::IceError>
 pub async fn rsiprtp::ice::IceAgent::state(&self) -> rsiprtp::ice::IceState
 impl core::marker::Freeze for rsiprtp::ice::IceAgent
@@ -9670,6 +9671,14 @@ impl<T> typenum::type_operators::Same for rsiprtp::sdp::builder::SdpBuilder
 pub type rsiprtp::sdp::builder::SdpBuilder::Output = T
 impl<V, T> ppv_lite86::types::VZip<V> for rsiprtp::sdp::builder::SdpBuilder where V: ppv_lite86::types::MultiLane<T>
 pub fn rsiprtp::sdp::builder::SdpBuilder::vzip(self) -> V
+pub mod rsiprtp::sdp::ice_attrs
+pub fn rsiprtp::sdp::ice_attrs::apply_default_candidate(sdp: &mut rsiprtp::sdp::parser::SessionDescription, media_index: usize, default: &rsiprtp::ice::Candidate)
+pub fn rsiprtp::sdp::ice_attrs::read_candidates(m: &rsiprtp::sdp::parser::MediaDescription) -> alloc::vec::Vec<rsiprtp::ice::Candidate>
+pub fn rsiprtp::sdp::ice_attrs::read_ice_credentials(m: &rsiprtp::sdp::parser::MediaDescription) -> core::option::Option<(alloc::string::String, alloc::string::String)>
+pub fn rsiprtp::sdp::ice_attrs::read_rtcp_mux(m: &rsiprtp::sdp::parser::MediaDescription) -> bool
+pub fn rsiprtp::sdp::ice_attrs::write_candidates(m: &mut rsiprtp::sdp::parser::MediaDescription, cands: &[rsiprtp::ice::Candidate])
+pub fn rsiprtp::sdp::ice_attrs::write_ice_credentials(m: &mut rsiprtp::sdp::parser::MediaDescription, ufrag: &str, pwd: &str)
+pub fn rsiprtp::sdp::ice_attrs::write_rtcp_mux(m: &mut rsiprtp::sdp::parser::MediaDescription)
 pub mod rsiprtp::sdp::negotiation
 pub struct rsiprtp::sdp::negotiation::Codec
 pub rsiprtp::sdp::negotiation::Codec::channels: u8

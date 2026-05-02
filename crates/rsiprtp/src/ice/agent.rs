@@ -102,7 +102,11 @@ pub struct IceConfig {
     pub local_ufrag: String,
     /// Local ICE password used for STUN message integrity.
     pub local_pwd: String,
-    /// Gather timeout.
+    /// Wall-clock cap on `gather_candidates`. On timeout, whatever
+    /// candidates have already been gathered are returned (partial results
+    /// are useful — the caller can still negotiate). Host gathering happens
+    /// first, so a timeout will typically still leave at least the host
+    /// candidates intact.
     pub gather_timeout_ms: u64,
     /// Check timeout.
     pub check_timeout_ms: u64,
@@ -114,7 +118,10 @@ impl Default for IceConfig {
             stun_servers: vec![StunServer::GOOGLE],
             local_ufrag: generate_ice_ufrag(),
             local_pwd: generate_ice_pwd(),
-            gather_timeout_ms: 5000,
+            // 1500ms: STUN RTT well under 200ms (HLD); leaves headroom
+            // for several retransmits before the deferred-answer path
+            // forces send.
+            gather_timeout_ms: 1500,
             check_timeout_ms: 3000,
         }
     }
@@ -220,25 +227,64 @@ impl IceAgent {
         self.selected_pair.read().await.clone()
     }
 
+    /// Get the host-bound socket for an address that appeared as a host
+    /// candidate's address (i.e. anything in `local_candidates()` with
+    /// `CandidateType::Host`).
+    ///
+    /// After `start_checks` succeeds, the caller may take ownership of the
+    /// socket for RTP; the agent will not race on it provided no further
+    /// ICE operations (gather, restart) are invoked.
+    pub async fn socket_for(&self, addr: SocketAddr) -> Option<Arc<UdpSocket>> {
+        self.sockets.read().await.get(&addr).cloned()
+    }
+
     /// Gather local candidates.
     ///
     /// Discovers host candidates from local interfaces and
     /// server-reflexive candidates from STUN servers.
+    ///
+    /// The whole call is bounded by `IceConfig::gather_timeout_ms`. If the
+    /// budget elapses, gathering stops and whatever candidates have already
+    /// been gathered are returned — partial results are useful (host
+    /// candidates alone are enough to keep negotiating).
     pub async fn gather_candidates(&self) -> Result<Vec<Candidate>, IceError> {
         *self.state.write().await = IceState::Gathering;
         info!("Starting ICE candidate gathering");
 
+        let budget = std::time::Duration::from_millis(self.config.gather_timeout_ms);
+        match tokio::time::timeout(budget, self.gather_candidates_inner()).await {
+            Ok(result) => result,
+            Err(_) => {
+                // Timeout: return whatever was stored so far.
+                let partial = self.local_candidates.read().await.clone();
+                warn!(
+                    "ICE candidate gathering timed out after {}ms; returning {} partial candidates",
+                    self.config.gather_timeout_ms,
+                    partial.len()
+                );
+                Ok(partial)
+            }
+        }
+    }
+
+    /// Inner gathering body — host then srflx, each batch stored in
+    /// `local_candidates` so the outer timeout wrapper can return partial
+    /// results.
+    async fn gather_candidates_inner(&self) -> Result<Vec<Candidate>, IceError> {
         let mut candidates = Vec::new();
 
         // Gather host candidates from local interfaces
         let host_candidates = self.gather_host_candidates().await?;
         candidates.extend(host_candidates);
+        // Stash hosts before we start STUN — if srflx gathering times out
+        // mid-flight, the timeout branch can still return the hosts.
+        *self.local_candidates.write().await = candidates.clone();
 
         // Gather server-reflexive candidates from STUN
         let srflx_candidates = self.gather_srflx_candidates().await;
         candidates.extend(srflx_candidates);
 
-        // Store candidates
+        // Store final candidate set
         *self.local_candidates.write().await = candidates.clone();
 
         info!("Gathered {} candidates", candidates.len());
@@ -1098,7 +1144,7 @@ mod tests {
         assert!(!config.stun_servers.is_empty());
         assert_eq!(config.local_ufrag.len(), 8);
         assert_eq!(config.local_pwd.len(), 24);
-        assert_eq!(config.gather_timeout_ms, 5000);
+        assert_eq!(config.gather_timeout_ms, 1500);
         assert_eq!(config.check_timeout_ms, 3000);
     }
 
@@ -1663,6 +1709,36 @@ mod tests {
         // Close should clear sockets
         agent.close().await;
         assert!(agent.sockets.read().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_socket_for_returns_bound_socket() {
+        let config = IceConfig {
+            stun_servers: vec![],
+            ..Default::default()
+        };
+        let agent = IceAgent::new(config, IceRole::Controlling);
+
+        let candidates = agent.gather_candidates().await.expect("gather");
+        // Pick any host candidate; its address must be a key in the
+        // sockets map.
+        let host = candidates
+            .iter()
+            .find(|c| c.candidate_type == CandidateType::Host)
+            .expect("host candidate");
+        let socket = agent.socket_for(host.address).await.expect("socket");
+        assert_eq!(socket.local_addr().unwrap(), host.address);
+    }
+
+    #[tokio::test]
+    async fn test_socket_for_unknown_address() {
+        let config = IceConfig {
+            stun_servers: vec![],
+            ..Default::default()
+        };
+        let agent = IceAgent::new(config, IceRole::Controlling);
+        let unknown = SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::new(203, 0, 113, 99)), 65000);
+        assert!(agent.socket_for(unknown).await.is_none());
     }
 
     #[tokio::test]
@@ -3184,6 +3260,44 @@ mod tests {
 
         // State should be Gathering (remains after gathering completes)
         assert_eq!(agent.state().await, IceState::Gathering);
+    }
+
+    // Test: gather_candidates respects gather_timeout_ms as a wall-clock cap.
+    // With a 1ms budget, the call must return quickly even though host
+    // gathering would normally take longer. Partial results (possibly empty
+    // or just hosts) are acceptable; what matters is the wall-clock bound.
+    #[tokio::test]
+    async fn test_gather_candidates_respects_gather_timeout() {
+        // Use a STUN server pointed at an unrouteable address so srflx
+        // gathering would otherwise stall up to check_timeout_ms.
+        let bogus_stun = StunServer {
+            name: "bogus",
+            addr: SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::new(203, 0, 113, 1)), 3478),
+        };
+        let config = IceConfig {
+            stun_servers: vec![bogus_stun],
+            check_timeout_ms: 5_000,
+            gather_timeout_ms: 1,
+            ..Default::default()
+        };
+        let agent = IceAgent::new(config, IceRole::Controlling);
+
+        let start = tokio::time::Instant::now();
+        // Must not error — partial results are returned on timeout.
+        let _ = agent
+            .gather_candidates()
+            .await
+            .expect("gather (partial ok)");
+        let elapsed = start.elapsed();
+
+        // Generous bound: the cap is 1ms, but host binding + scheduler
+        // overhead can run a few hundred ms on busy CI. 2 seconds is well
+        // below check_timeout_ms (5s), proving the cap kicked in.
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "gather_candidates took {:?} — gather_timeout_ms not enforced",
+            elapsed
+        );
     }
 
     // Test: start_checks sets state to Checking

@@ -2,6 +2,7 @@
 //!
 //! Implements the offer/answer model for SDP session negotiation.
 
+use crate::sdp::ice_attrs;
 use crate::sdp::parser::{
     Attribute, Direction, MediaDescription, MediaType, RtpMap, SessionDescription,
 };
@@ -101,6 +102,22 @@ pub fn create_answer(
             continue;
         }
 
+        // Inspect offer-side ICE/rtcp-mux state before we overwrite attrs.
+        let offer_has_ice = !ice_attrs::read_candidates(media).is_empty();
+        let offer_has_mux = ice_attrs::read_rtcp_mux(media);
+
+        // ICE without rtcp-mux: reject the media (we don't grow a
+        // separate-RTCP path). Wipe the line's attributes too — it
+        // was cloned from the offer and would otherwise carry the
+        // offerer's ufrag/pwd/candidate lines onto the answer's
+        // dead m=. Port=0 already signals rejection; no attrs are
+        // meaningful on a rejected line.
+        if offer_has_ice && !offer_has_mux {
+            media.port = 0;
+            media.attributes.clear();
+            continue;
+        }
+
         // Get remote address (prefer media-level, fall back to session-level)
         let remote_addr = media
             .connection
@@ -126,6 +143,11 @@ pub fn create_answer(
 
             // Update attributes
             media.attributes = create_media_attributes(&negotiated_media.codec, new_direction);
+
+            // Mirror rtcp-mux from the offer if it was present.
+            if offer_has_mux {
+                ice_attrs::write_rtcp_mux(media);
+            }
 
             negotiated.push(NegotiatedMedia {
                 direction: new_direction,
@@ -1053,5 +1075,166 @@ a=sendrecv
         let (_answer, negotiated) = create_answer(&offer, &local_codecs, 5000).unwrap();
         // Both audio streams should be negotiated
         assert_eq!(negotiated.len(), 2);
+    }
+
+    // rtcp-mux + ICE negotiation
+    #[test]
+    fn test_create_answer_ice_with_rtcp_mux_accepted() {
+        let offer_sdp = r#"v=0
+o=- 123 1 IN IP4 192.168.1.1
+s=-
+c=IN IP4 192.168.1.1
+t=0 0
+m=audio 49170 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+a=sendrecv
+a=ice-ufrag:abcd1234
+a=ice-pwd:0123456789abcdef01234567
+a=candidate:host1 1 UDP 2130706431 192.168.1.1 49170 typ host
+a=rtcp-mux
+"#;
+        let offer = SessionDescription::parse(offer_sdp).unwrap();
+        let local_codecs = vec![Codec::pcmu()];
+
+        let (answer, negotiated) = create_answer(&offer, &local_codecs, 5000).unwrap();
+        assert_eq!(negotiated.len(), 1);
+
+        let audio = answer.audio_media().unwrap();
+        assert_eq!(audio.port, 5000);
+        // rtcp-mux must be mirrored on the answer.
+        assert!(audio.attributes.iter().any(|a| a.name == "rtcp-mux"));
+    }
+
+    #[test]
+    fn test_create_answer_ice_without_rtcp_mux_rejected() {
+        let offer_sdp = r#"v=0
+o=- 123 1 IN IP4 192.168.1.1
+s=-
+c=IN IP4 192.168.1.1
+t=0 0
+m=audio 49170 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+a=sendrecv
+a=ice-ufrag:abcd1234
+a=ice-pwd:0123456789abcdef01234567
+a=candidate:host1 1 UDP 2130706431 192.168.1.1 49170 typ host
+"#;
+        let offer = SessionDescription::parse(offer_sdp).unwrap();
+        let local_codecs = vec![Codec::pcmu()];
+
+        // ICE offer without rtcp-mux must reject the media. Single media
+        // line means create_answer returns None overall.
+        let result = create_answer(&offer, &local_codecs, 5000);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_create_answer_non_ice_without_rtcp_mux_accepted() {
+        // Regression: non-ICE media without rtcp-mux must still negotiate.
+        let offer_sdp = r#"v=0
+o=- 123 1 IN IP4 192.168.1.1
+s=-
+c=IN IP4 192.168.1.1
+t=0 0
+m=audio 49170 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+a=sendrecv
+"#;
+        let offer = SessionDescription::parse(offer_sdp).unwrap();
+        let local_codecs = vec![Codec::pcmu()];
+
+        let (answer, negotiated) = create_answer(&offer, &local_codecs, 5000).unwrap();
+        assert_eq!(negotiated.len(), 1);
+
+        let audio = answer.audio_media().unwrap();
+        // No rtcp-mux on the answer because there was none on the offer.
+        assert!(!audio.attributes.iter().any(|a| a.name == "rtcp-mux"));
+    }
+
+    #[test]
+    fn test_create_answer_non_ice_with_rtcp_mux_accepted_and_mirrored() {
+        // WebRTC-style: a=rtcp-mux with no ICE attrs. Must classify as
+        // non-ICE (no candidates ⇒ no ICE-without-mux rejection path),
+        // negotiate normally, and mirror rtcp-mux on the answer.
+        let offer_sdp = r#"v=0
+o=- 123 1 IN IP4 192.168.1.1
+s=-
+c=IN IP4 192.168.1.1
+t=0 0
+m=audio 49170 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+a=sendrecv
+a=rtcp-mux
+"#;
+        let offer = SessionDescription::parse(offer_sdp).unwrap();
+        let local_codecs = vec![Codec::pcmu()];
+
+        let (answer, negotiated) = create_answer(&offer, &local_codecs, 5000).unwrap();
+        assert_eq!(negotiated.len(), 1);
+
+        let audio = answer.audio_media().unwrap();
+        // Port negotiated normally — not 0.
+        assert_eq!(audio.port, 5000);
+        // rtcp-mux mirrored from offer.
+        assert!(audio.attributes.iter().any(|a| a.name == "rtcp-mux"));
+        // No ICE attrs leaked onto the answer.
+        assert!(!audio.attributes.iter().any(|a| a.name == "ice-ufrag"));
+        assert!(!audio.attributes.iter().any(|a| a.name == "ice-pwd"));
+        assert!(!audio.attributes.iter().any(|a| a.name == "candidate"));
+    }
+
+    #[test]
+    fn test_create_answer_mixed_ice_with_and_without_mux() {
+        // Two audio m-lines: first ICE+mux (accept), second ICE without
+        // mux (reject). The rejected line must carry no ICE attrs.
+        let offer_sdp = r#"v=0
+o=- 123 1 IN IP4 192.168.1.1
+s=-
+c=IN IP4 192.168.1.1
+t=0 0
+m=audio 49170 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+a=sendrecv
+a=ice-ufrag:firstuf
+a=ice-pwd:firstpwdsecretvalue1234
+a=candidate:host1 1 UDP 2130706431 192.168.1.1 49170 typ host
+a=rtcp-mux
+m=audio 49180 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+a=sendrecv
+a=ice-ufrag:secondu
+a=ice-pwd:secondpwdsecretvalue234
+a=candidate:host2 1 UDP 2130706431 192.168.1.1 49180 typ host
+"#;
+        let offer = SessionDescription::parse(offer_sdp).unwrap();
+        let local_codecs = vec![Codec::pcmu()];
+
+        let (answer, negotiated) = create_answer(&offer, &local_codecs, 5000).unwrap();
+        // Only the first line negotiated.
+        assert_eq!(negotiated.len(), 1);
+        assert_eq!(answer.media.len(), 2);
+
+        // First line: accepted, port set, rtcp-mux mirrored.
+        assert_eq!(answer.media[0].port, 5000);
+        assert!(answer.media[0]
+            .attributes
+            .iter()
+            .any(|a| a.name == "rtcp-mux"));
+
+        // Second line: rejected (port 0) and ICE attrs from the offer
+        // must not leak onto the answer's dead m=.
+        assert_eq!(answer.media[1].port, 0);
+        assert!(!answer.media[1]
+            .attributes
+            .iter()
+            .any(|a| a.name == "ice-ufrag"));
+        assert!(!answer.media[1]
+            .attributes
+            .iter()
+            .any(|a| a.name == "ice-pwd"));
+        assert!(!answer.media[1]
+            .attributes
+            .iter()
+            .any(|a| a.name == "candidate"));
     }
 }
