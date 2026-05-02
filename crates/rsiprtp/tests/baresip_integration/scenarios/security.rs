@@ -1,10 +1,11 @@
 //! Security testing scenarios for TLS and SRTP.
 //!
-//! These tests verify secure communication capabilities including
-//! SIP over TLS, SRTP encryption, and DTLS-SRTP key exchange.
+//! These tests exercise SIP-over-TLS and SRTP-via-SDES code paths.
 //!
-//! Note: These are placeholder/simulation tests as full TLS/SRTP
-//! requires additional dependencies and certificate infrastructure.
+//! Note: these are placeholder/simulation tests — they do not stand up a
+//! real TLS handshake, real SRTP encryption, or any DTLS-SRTP machinery
+//! (rsiprtp does not implement DTLS-SRTP). They check that calls
+//! progress through the expected states with secure-flavoured URIs.
 
 use std::time::Duration;
 
