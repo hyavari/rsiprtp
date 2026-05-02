@@ -40,7 +40,7 @@ graph TB
 
     subgraph "Media Layer"
         RTP[rsiprtp::rtp<br/><i>RTP/RTCP/DTMF</i>]
-        SRTP[rsiprtp::srtp<br/><i>SRTP & DTLS framing</i>]
+        SRTP[rsiprtp::srtp<br/><i>SRTP-SDES</i>]
         MEDIA[rsiprtp::media<br/><i>Codecs & Jitter Buffer</i>]
     end
 
@@ -88,9 +88,7 @@ Responsibilities by module:
 - **`rsiprtp::rtp`** — RTP packet encoding/decoding, RTCP sender and receiver
   reports, RFC 4733 DTMF events, an `RtpSession` that owns sequence and
   timestamp state.
-- **`rsiprtp::srtp`** — SRTP encryption/decryption with SDES key exchange,
-  plus DTLS-SRTP framing types (the DTLS handshake itself is not yet
-  implemented).
+- **`rsiprtp::srtp`** — SRTP encryption/decryption with SDES key exchange.
 - **`rsiprtp::ice`** — ICE, STUN, and TURN building blocks. Reachable as a
   module today; not yet integrated into the high-level call flow.
 - **`rsiprtp::media`** — audio codecs (G.711, G.722, Opus), an adaptive

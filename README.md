@@ -60,7 +60,7 @@ Or directly in `Cargo.toml`:
 
 ```toml
 [dependencies]
-rsiprtp = "0.2"
+rsiprtp = "0.3"
 tokio   = { version = "1", features = ["full"] }
 ```
 
@@ -132,9 +132,8 @@ audio calls over traditional SIP. The following are deliberately out of
 scope or not yet implemented; if you need any of these, please open an
 issue first:
 
-- **WebRTC interop.** DTLS-SRTP is present as framing types only — the DTLS
-  handshake itself is not implemented. SRTP is reachable via SDES key
-  exchange, which works against SIP carriers but not against browsers.
+- **WebRTC interop.** No DTLS-SRTP. SRTP is reachable via SDES key
+  exchange (RFC 4568), which works against SIP carriers but not against browsers.
 - **Server roles**: REGISTER server / location service, B2BUA, proxy, registrar.
 - **Event packages**: SUBSCRIBE / NOTIFY / PUBLISH carry method-level message
   support only — no event-state machines, presence, BLF, or MWI.
