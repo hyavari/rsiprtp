@@ -5098,6 +5098,71 @@ impl<T> typenum::type_operators::Same for rsiprtp::sip::SipMessage
 pub type rsiprtp::sip::SipMessage::Output = T
 impl<V, T> ppv_lite86::types::VZip<V> for rsiprtp::sip::SipMessage where V: ppv_lite86::types::MultiLane<T>
 pub fn rsiprtp::sip::SipMessage::vzip(self) -> V
+pub enum rsiprtp::prelude::TransportProtocol
+pub rsiprtp::prelude::TransportProtocol::Tcp
+pub rsiprtp::prelude::TransportProtocol::Tls
+pub rsiprtp::prelude::TransportProtocol::Udp
+impl rsiprtp::transport::TransportProtocol
+pub fn rsiprtp::transport::TransportProtocol::default_port(&self) -> u16
+pub fn rsiprtp::transport::TransportProtocol::is_reliable(&self) -> bool
+pub fn rsiprtp::transport::TransportProtocol::is_secure(&self) -> bool
+impl core::clone::Clone for rsiprtp::transport::TransportProtocol
+pub fn rsiprtp::transport::TransportProtocol::clone(&self) -> rsiprtp::transport::TransportProtocol
+impl core::cmp::Eq for rsiprtp::transport::TransportProtocol
+impl core::cmp::PartialEq for rsiprtp::transport::TransportProtocol
+pub fn rsiprtp::transport::TransportProtocol::eq(&self, other: &rsiprtp::transport::TransportProtocol) -> bool
+impl core::fmt::Debug for rsiprtp::transport::TransportProtocol
+pub fn rsiprtp::transport::TransportProtocol::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for rsiprtp::transport::TransportProtocol
+pub fn rsiprtp::transport::TransportProtocol::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for rsiprtp::transport::TransportProtocol
+pub fn rsiprtp::transport::TransportProtocol::hash<__H: core::hash::Hasher>(&self, state: &mut __H)
+impl core::marker::Copy for rsiprtp::transport::TransportProtocol
+impl core::marker::StructuralPartialEq for rsiprtp::transport::TransportProtocol
+impl core::marker::Freeze for rsiprtp::transport::TransportProtocol
+impl core::marker::Send for rsiprtp::transport::TransportProtocol
+impl core::marker::Sync for rsiprtp::transport::TransportProtocol
+impl core::marker::Unpin for rsiprtp::transport::TransportProtocol
+impl core::marker::UnsafeUnpin for rsiprtp::transport::TransportProtocol
+impl core::panic::unwind_safe::RefUnwindSafe for rsiprtp::transport::TransportProtocol
+impl core::panic::unwind_safe::UnwindSafe for rsiprtp::transport::TransportProtocol
+impl<T, U> core::convert::Into<U> for rsiprtp::transport::TransportProtocol where U: core::convert::From<T>
+pub fn rsiprtp::transport::TransportProtocol::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for rsiprtp::transport::TransportProtocol where U: core::convert::Into<T>
+pub type rsiprtp::transport::TransportProtocol::Error = core::convert::Infallible
+pub fn rsiprtp::transport::TransportProtocol::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for rsiprtp::transport::TransportProtocol where U: core::convert::TryFrom<T>
+pub type rsiprtp::transport::TransportProtocol::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn rsiprtp::transport::TransportProtocol::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for rsiprtp::transport::TransportProtocol where T: core::clone::Clone
+pub type rsiprtp::transport::TransportProtocol::Owned = T
+pub fn rsiprtp::transport::TransportProtocol::clone_into(&self, target: &mut T)
+pub fn rsiprtp::transport::TransportProtocol::to_owned(&self) -> T
+impl<T> alloc::string::ToString for rsiprtp::transport::TransportProtocol where T: core::fmt::Display + ?core::marker::Sized
+pub fn rsiprtp::transport::TransportProtocol::to_string(&self) -> alloc::string::String
+impl<T> core::any::Any for rsiprtp::transport::TransportProtocol where T: 'static + ?core::marker::Sized
+pub fn rsiprtp::transport::TransportProtocol::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for rsiprtp::transport::TransportProtocol where T: ?core::marker::Sized
+pub fn rsiprtp::transport::TransportProtocol::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for rsiprtp::transport::TransportProtocol where T: ?core::marker::Sized
+pub fn rsiprtp::transport::TransportProtocol::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for rsiprtp::transport::TransportProtocol where T: core::clone::Clone
+pub unsafe fn rsiprtp::transport::TransportProtocol::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for rsiprtp::transport::TransportProtocol
+pub fn rsiprtp::transport::TransportProtocol::from(t: T) -> T
+impl<T> downcast_rs::Downcast for rsiprtp::transport::TransportProtocol where T: core::any::Any
+pub fn rsiprtp::transport::TransportProtocol::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn rsiprtp::transport::TransportProtocol::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn rsiprtp::transport::TransportProtocol::into_any(self: alloc::boxed::Box<T>) -> alloc::boxed::Box<dyn core::any::Any>
+pub fn rsiprtp::transport::TransportProtocol::into_any_rc(self: alloc::rc::Rc<T>) -> alloc::rc::Rc<dyn core::any::Any>
+impl<T> downcast_rs::DowncastSync for rsiprtp::transport::TransportProtocol where T: core::any::Any + core::marker::Send + core::marker::Sync
+pub fn rsiprtp::transport::TransportProtocol::into_any_arc(self: alloc::sync::Arc<T>) -> alloc::sync::Arc<(dyn core::any::Any + core::marker::Send + core::marker::Sync)>
+impl<T> tracing::instrument::Instrument for rsiprtp::transport::TransportProtocol
+impl<T> tracing::instrument::WithSubscriber for rsiprtp::transport::TransportProtocol
+impl<T> typenum::type_operators::Same for rsiprtp::transport::TransportProtocol
+pub type rsiprtp::transport::TransportProtocol::Output = T
+impl<V, T> ppv_lite86::types::VZip<V> for rsiprtp::transport::TransportProtocol where V: ppv_lite86::types::MultiLane<T>
+pub fn rsiprtp::transport::TransportProtocol::vzip(self) -> V
 pub struct rsiprtp::prelude::Call
 impl rsiprtp::session::call::Call
 pub fn rsiprtp::session::call::Call::can_receive_media(&self) -> bool
@@ -6287,6 +6352,61 @@ impl<T> typenum::type_operators::Same for rsiprtp::session::RegistrationManager
 pub type rsiprtp::session::RegistrationManager::Output = T
 impl<V, T> ppv_lite86::types::VZip<V> for rsiprtp::session::RegistrationManager where V: ppv_lite86::types::MultiLane<T>
 pub fn rsiprtp::session::RegistrationManager::vzip(self) -> V
+pub struct rsiprtp::prelude::ResolvedTarget
+pub rsiprtp::prelude::ResolvedTarget::addresses: alloc::vec::Vec<core::net::ip_addr::IpAddr>
+pub rsiprtp::prelude::ResolvedTarget::host: alloc::string::String
+pub rsiprtp::prelude::ResolvedTarget::port: u16
+pub rsiprtp::prelude::ResolvedTarget::priority: u16
+pub rsiprtp::prelude::ResolvedTarget::transport: rsiprtp::transport::TransportProtocol
+pub rsiprtp::prelude::ResolvedTarget::weight: u16
+impl rsiprtp::transport::ResolvedTarget
+pub fn rsiprtp::transport::ResolvedTarget::socket_addrs(&self) -> alloc::vec::Vec<core::net::socket_addr::SocketAddr>
+impl core::clone::Clone for rsiprtp::transport::ResolvedTarget
+pub fn rsiprtp::transport::ResolvedTarget::clone(&self) -> rsiprtp::transport::ResolvedTarget
+impl core::fmt::Debug for rsiprtp::transport::ResolvedTarget
+pub fn rsiprtp::transport::ResolvedTarget::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for rsiprtp::transport::ResolvedTarget
+impl core::marker::Send for rsiprtp::transport::ResolvedTarget
+impl core::marker::Sync for rsiprtp::transport::ResolvedTarget
+impl core::marker::Unpin for rsiprtp::transport::ResolvedTarget
+impl core::marker::UnsafeUnpin for rsiprtp::transport::ResolvedTarget
+impl core::panic::unwind_safe::RefUnwindSafe for rsiprtp::transport::ResolvedTarget
+impl core::panic::unwind_safe::UnwindSafe for rsiprtp::transport::ResolvedTarget
+impl<T, U> core::convert::Into<U> for rsiprtp::transport::ResolvedTarget where U: core::convert::From<T>
+pub fn rsiprtp::transport::ResolvedTarget::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for rsiprtp::transport::ResolvedTarget where U: core::convert::Into<T>
+pub type rsiprtp::transport::ResolvedTarget::Error = core::convert::Infallible
+pub fn rsiprtp::transport::ResolvedTarget::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for rsiprtp::transport::ResolvedTarget where U: core::convert::TryFrom<T>
+pub type rsiprtp::transport::ResolvedTarget::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn rsiprtp::transport::ResolvedTarget::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for rsiprtp::transport::ResolvedTarget where T: core::clone::Clone
+pub type rsiprtp::transport::ResolvedTarget::Owned = T
+pub fn rsiprtp::transport::ResolvedTarget::clone_into(&self, target: &mut T)
+pub fn rsiprtp::transport::ResolvedTarget::to_owned(&self) -> T
+impl<T> core::any::Any for rsiprtp::transport::ResolvedTarget where T: 'static + ?core::marker::Sized
+pub fn rsiprtp::transport::ResolvedTarget::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for rsiprtp::transport::ResolvedTarget where T: ?core::marker::Sized
+pub fn rsiprtp::transport::ResolvedTarget::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for rsiprtp::transport::ResolvedTarget where T: ?core::marker::Sized
+pub fn rsiprtp::transport::ResolvedTarget::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for rsiprtp::transport::ResolvedTarget where T: core::clone::Clone
+pub unsafe fn rsiprtp::transport::ResolvedTarget::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for rsiprtp::transport::ResolvedTarget
+pub fn rsiprtp::transport::ResolvedTarget::from(t: T) -> T
+impl<T> downcast_rs::Downcast for rsiprtp::transport::ResolvedTarget where T: core::any::Any
+pub fn rsiprtp::transport::ResolvedTarget::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn rsiprtp::transport::ResolvedTarget::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn rsiprtp::transport::ResolvedTarget::into_any(self: alloc::boxed::Box<T>) -> alloc::boxed::Box<dyn core::any::Any>
+pub fn rsiprtp::transport::ResolvedTarget::into_any_rc(self: alloc::rc::Rc<T>) -> alloc::rc::Rc<dyn core::any::Any>
+impl<T> downcast_rs::DowncastSync for rsiprtp::transport::ResolvedTarget where T: core::any::Any + core::marker::Send + core::marker::Sync
+pub fn rsiprtp::transport::ResolvedTarget::into_any_arc(self: alloc::sync::Arc<T>) -> alloc::sync::Arc<(dyn core::any::Any + core::marker::Send + core::marker::Sync)>
+impl<T> tracing::instrument::Instrument for rsiprtp::transport::ResolvedTarget
+impl<T> tracing::instrument::WithSubscriber for rsiprtp::transport::ResolvedTarget
+impl<T> typenum::type_operators::Same for rsiprtp::transport::ResolvedTarget
+pub type rsiprtp::transport::ResolvedTarget::Output = T
+impl<V, T> ppv_lite86::types::VZip<V> for rsiprtp::transport::ResolvedTarget where V: ppv_lite86::types::MultiLane<T>
+pub fn rsiprtp::transport::ResolvedTarget::vzip(self) -> V
 pub struct rsiprtp::prelude::RtcpCompound
 pub rsiprtp::prelude::RtcpCompound::packets: alloc::vec::Vec<rsiprtp::rtp::rtcp::RtcpPacket>
 impl rsiprtp::rtp::rtcp::RtcpCompound
@@ -6714,6 +6834,48 @@ impl<T> typenum::type_operators::Same for rsiprtp::sip::SipRequest
 pub type rsiprtp::sip::SipRequest::Output = T
 impl<V, T> ppv_lite86::types::VZip<V> for rsiprtp::sip::SipRequest where V: ppv_lite86::types::MultiLane<T>
 pub fn rsiprtp::sip::SipRequest::vzip(self) -> V
+pub struct rsiprtp::prelude::SipResolver
+impl rsiprtp::transport::SipResolver
+pub async fn rsiprtp::transport::SipResolver::new() -> core::result::Result<Self, rsiprtp::transport::ResolverError>
+pub async fn rsiprtp::transport::SipResolver::resolve(&self, domain: &str, preferred_transport: core::option::Option<rsiprtp::transport::TransportProtocol>) -> core::result::Result<alloc::vec::Vec<rsiprtp::transport::ResolvedTarget>, rsiprtp::transport::ResolverError>
+pub async fn rsiprtp::transport::SipResolver::resolve_uri(&self, uri: &str) -> core::result::Result<alloc::vec::Vec<rsiprtp::transport::ResolvedTarget>, rsiprtp::transport::ResolverError>
+pub fn rsiprtp::transport::SipResolver::with_config(config: hickory_resolver::config::ResolverConfig, opts: hickory_resolver::config::ResolverOpts) -> Self
+impl core::marker::Freeze for rsiprtp::transport::SipResolver
+impl core::marker::Send for rsiprtp::transport::SipResolver
+impl core::marker::Sync for rsiprtp::transport::SipResolver
+impl core::marker::Unpin for rsiprtp::transport::SipResolver
+impl core::marker::UnsafeUnpin for rsiprtp::transport::SipResolver
+impl !core::panic::unwind_safe::RefUnwindSafe for rsiprtp::transport::SipResolver
+impl !core::panic::unwind_safe::UnwindSafe for rsiprtp::transport::SipResolver
+impl<T, U> core::convert::Into<U> for rsiprtp::transport::SipResolver where U: core::convert::From<T>
+pub fn rsiprtp::transport::SipResolver::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for rsiprtp::transport::SipResolver where U: core::convert::Into<T>
+pub type rsiprtp::transport::SipResolver::Error = core::convert::Infallible
+pub fn rsiprtp::transport::SipResolver::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for rsiprtp::transport::SipResolver where U: core::convert::TryFrom<T>
+pub type rsiprtp::transport::SipResolver::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn rsiprtp::transport::SipResolver::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> core::any::Any for rsiprtp::transport::SipResolver where T: 'static + ?core::marker::Sized
+pub fn rsiprtp::transport::SipResolver::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for rsiprtp::transport::SipResolver where T: ?core::marker::Sized
+pub fn rsiprtp::transport::SipResolver::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for rsiprtp::transport::SipResolver where T: ?core::marker::Sized
+pub fn rsiprtp::transport::SipResolver::borrow_mut(&mut self) -> &mut T
+impl<T> core::convert::From<T> for rsiprtp::transport::SipResolver
+pub fn rsiprtp::transport::SipResolver::from(t: T) -> T
+impl<T> downcast_rs::Downcast for rsiprtp::transport::SipResolver where T: core::any::Any
+pub fn rsiprtp::transport::SipResolver::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn rsiprtp::transport::SipResolver::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn rsiprtp::transport::SipResolver::into_any(self: alloc::boxed::Box<T>) -> alloc::boxed::Box<dyn core::any::Any>
+pub fn rsiprtp::transport::SipResolver::into_any_rc(self: alloc::rc::Rc<T>) -> alloc::rc::Rc<dyn core::any::Any>
+impl<T> downcast_rs::DowncastSync for rsiprtp::transport::SipResolver where T: core::any::Any + core::marker::Send + core::marker::Sync
+pub fn rsiprtp::transport::SipResolver::into_any_arc(self: alloc::sync::Arc<T>) -> alloc::sync::Arc<(dyn core::any::Any + core::marker::Send + core::marker::Sync)>
+impl<T> tracing::instrument::Instrument for rsiprtp::transport::SipResolver
+impl<T> tracing::instrument::WithSubscriber for rsiprtp::transport::SipResolver
+impl<T> typenum::type_operators::Same for rsiprtp::transport::SipResolver
+pub type rsiprtp::transport::SipResolver::Output = T
+impl<V, T> ppv_lite86::types::VZip<V> for rsiprtp::transport::SipResolver where V: ppv_lite86::types::MultiLane<T>
+pub fn rsiprtp::transport::SipResolver::vzip(self) -> V
 pub struct rsiprtp::prelude::SipResponse
 impl rsiprtp::sip::SipResponse
 pub fn rsiprtp::sip::SipResponse::body(&self) -> &[u8]
@@ -14601,458 +14763,6 @@ pub fn rsiprtp::sip::generate_branch() -> alloc::string::String
 pub fn rsiprtp::sip::generate_call_id(domain: &str) -> alloc::string::String
 pub fn rsiprtp::sip::generate_tag() -> alloc::string::String
 pub mod rsiprtp::srtp
-pub mod rsiprtp::srtp::dtls
-pub enum rsiprtp::srtp::dtls::DtlsError
-pub rsiprtp::srtp::dtls::DtlsError::FingerprintMismatch
-pub rsiprtp::srtp::dtls::DtlsError::HandshakeFailed(alloc::string::String)
-pub rsiprtp::srtp::dtls::DtlsError::InvalidState(alloc::string::String)
-pub rsiprtp::srtp::dtls::DtlsError::Io(std::io::error::Error)
-pub rsiprtp::srtp::dtls::DtlsError::KeyExportFailed(alloc::string::String)
-pub rsiprtp::srtp::dtls::DtlsError::OpenSsl(alloc::string::String)
-impl core::convert::From<std::io::error::Error> for rsiprtp::srtp::dtls::DtlsError
-pub fn rsiprtp::srtp::dtls::DtlsError::from(source: std::io::error::Error) -> Self
-impl core::error::Error for rsiprtp::srtp::dtls::DtlsError
-pub fn rsiprtp::srtp::dtls::DtlsError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
-impl core::fmt::Debug for rsiprtp::srtp::dtls::DtlsError
-pub fn rsiprtp::srtp::dtls::DtlsError::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::fmt::Display for rsiprtp::srtp::dtls::DtlsError
-pub fn rsiprtp::srtp::dtls::DtlsError::fmt(&self, __formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Freeze for rsiprtp::srtp::dtls::DtlsError
-impl core::marker::Send for rsiprtp::srtp::dtls::DtlsError
-impl core::marker::Sync for rsiprtp::srtp::dtls::DtlsError
-impl core::marker::Unpin for rsiprtp::srtp::dtls::DtlsError
-impl core::marker::UnsafeUnpin for rsiprtp::srtp::dtls::DtlsError
-impl !core::panic::unwind_safe::RefUnwindSafe for rsiprtp::srtp::dtls::DtlsError
-impl !core::panic::unwind_safe::UnwindSafe for rsiprtp::srtp::dtls::DtlsError
-impl<T, U> core::convert::Into<U> for rsiprtp::srtp::dtls::DtlsError where U: core::convert::From<T>
-pub fn rsiprtp::srtp::dtls::DtlsError::into(self) -> U
-impl<T, U> core::convert::TryFrom<U> for rsiprtp::srtp::dtls::DtlsError where U: core::convert::Into<T>
-pub type rsiprtp::srtp::dtls::DtlsError::Error = core::convert::Infallible
-pub fn rsiprtp::srtp::dtls::DtlsError::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
-impl<T, U> core::convert::TryInto<U> for rsiprtp::srtp::dtls::DtlsError where U: core::convert::TryFrom<T>
-pub type rsiprtp::srtp::dtls::DtlsError::Error = <U as core::convert::TryFrom<T>>::Error
-pub fn rsiprtp::srtp::dtls::DtlsError::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
-impl<T> alloc::string::ToString for rsiprtp::srtp::dtls::DtlsError where T: core::fmt::Display + ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsError::to_string(&self) -> alloc::string::String
-impl<T> core::any::Any for rsiprtp::srtp::dtls::DtlsError where T: 'static + ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsError::type_id(&self) -> core::any::TypeId
-impl<T> core::borrow::Borrow<T> for rsiprtp::srtp::dtls::DtlsError where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsError::borrow(&self) -> &T
-impl<T> core::borrow::BorrowMut<T> for rsiprtp::srtp::dtls::DtlsError where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsError::borrow_mut(&mut self) -> &mut T
-impl<T> core::convert::From<T> for rsiprtp::srtp::dtls::DtlsError
-pub fn rsiprtp::srtp::dtls::DtlsError::from(t: T) -> T
-impl<T> downcast_rs::Downcast for rsiprtp::srtp::dtls::DtlsError where T: core::any::Any
-pub fn rsiprtp::srtp::dtls::DtlsError::as_any(&self) -> &(dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::DtlsError::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::DtlsError::into_any(self: alloc::boxed::Box<T>) -> alloc::boxed::Box<dyn core::any::Any>
-pub fn rsiprtp::srtp::dtls::DtlsError::into_any_rc(self: alloc::rc::Rc<T>) -> alloc::rc::Rc<dyn core::any::Any>
-impl<T> downcast_rs::DowncastSync for rsiprtp::srtp::dtls::DtlsError where T: core::any::Any + core::marker::Send + core::marker::Sync
-pub fn rsiprtp::srtp::dtls::DtlsError::into_any_arc(self: alloc::sync::Arc<T>) -> alloc::sync::Arc<(dyn core::any::Any + core::marker::Send + core::marker::Sync)>
-impl<T> tracing::instrument::Instrument for rsiprtp::srtp::dtls::DtlsError
-impl<T> tracing::instrument::WithSubscriber for rsiprtp::srtp::dtls::DtlsError
-impl<T> typenum::type_operators::Same for rsiprtp::srtp::dtls::DtlsError
-pub type rsiprtp::srtp::dtls::DtlsError::Output = T
-impl<V, T> ppv_lite86::types::VZip<V> for rsiprtp::srtp::dtls::DtlsError where V: ppv_lite86::types::MultiLane<T>
-pub fn rsiprtp::srtp::dtls::DtlsError::vzip(self) -> V
-pub enum rsiprtp::srtp::dtls::DtlsRole
-pub rsiprtp::srtp::dtls::DtlsRole::ActPass
-pub rsiprtp::srtp::dtls::DtlsRole::Client
-pub rsiprtp::srtp::dtls::DtlsRole::Server
-impl rsiprtp::srtp::dtls::DtlsRole
-pub fn rsiprtp::srtp::dtls::DtlsRole::from_sdp_setup(setup: &str) -> core::option::Option<Self>
-pub fn rsiprtp::srtp::dtls::DtlsRole::to_sdp_setup(&self) -> &'static str
-impl core::clone::Clone for rsiprtp::srtp::dtls::DtlsRole
-pub fn rsiprtp::srtp::dtls::DtlsRole::clone(&self) -> rsiprtp::srtp::dtls::DtlsRole
-impl core::cmp::Eq for rsiprtp::srtp::dtls::DtlsRole
-impl core::cmp::PartialEq for rsiprtp::srtp::dtls::DtlsRole
-pub fn rsiprtp::srtp::dtls::DtlsRole::eq(&self, other: &rsiprtp::srtp::dtls::DtlsRole) -> bool
-impl core::fmt::Debug for rsiprtp::srtp::dtls::DtlsRole
-pub fn rsiprtp::srtp::dtls::DtlsRole::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for rsiprtp::srtp::dtls::DtlsRole
-impl core::marker::StructuralPartialEq for rsiprtp::srtp::dtls::DtlsRole
-impl core::marker::Freeze for rsiprtp::srtp::dtls::DtlsRole
-impl core::marker::Send for rsiprtp::srtp::dtls::DtlsRole
-impl core::marker::Sync for rsiprtp::srtp::dtls::DtlsRole
-impl core::marker::Unpin for rsiprtp::srtp::dtls::DtlsRole
-impl core::marker::UnsafeUnpin for rsiprtp::srtp::dtls::DtlsRole
-impl core::panic::unwind_safe::RefUnwindSafe for rsiprtp::srtp::dtls::DtlsRole
-impl core::panic::unwind_safe::UnwindSafe for rsiprtp::srtp::dtls::DtlsRole
-impl<T, U> core::convert::Into<U> for rsiprtp::srtp::dtls::DtlsRole where U: core::convert::From<T>
-pub fn rsiprtp::srtp::dtls::DtlsRole::into(self) -> U
-impl<T, U> core::convert::TryFrom<U> for rsiprtp::srtp::dtls::DtlsRole where U: core::convert::Into<T>
-pub type rsiprtp::srtp::dtls::DtlsRole::Error = core::convert::Infallible
-pub fn rsiprtp::srtp::dtls::DtlsRole::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
-impl<T, U> core::convert::TryInto<U> for rsiprtp::srtp::dtls::DtlsRole where U: core::convert::TryFrom<T>
-pub type rsiprtp::srtp::dtls::DtlsRole::Error = <U as core::convert::TryFrom<T>>::Error
-pub fn rsiprtp::srtp::dtls::DtlsRole::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
-impl<T> alloc::borrow::ToOwned for rsiprtp::srtp::dtls::DtlsRole where T: core::clone::Clone
-pub type rsiprtp::srtp::dtls::DtlsRole::Owned = T
-pub fn rsiprtp::srtp::dtls::DtlsRole::clone_into(&self, target: &mut T)
-pub fn rsiprtp::srtp::dtls::DtlsRole::to_owned(&self) -> T
-impl<T> core::any::Any for rsiprtp::srtp::dtls::DtlsRole where T: 'static + ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsRole::type_id(&self) -> core::any::TypeId
-impl<T> core::borrow::Borrow<T> for rsiprtp::srtp::dtls::DtlsRole where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsRole::borrow(&self) -> &T
-impl<T> core::borrow::BorrowMut<T> for rsiprtp::srtp::dtls::DtlsRole where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsRole::borrow_mut(&mut self) -> &mut T
-impl<T> core::clone::CloneToUninit for rsiprtp::srtp::dtls::DtlsRole where T: core::clone::Clone
-pub unsafe fn rsiprtp::srtp::dtls::DtlsRole::clone_to_uninit(&self, dest: *mut u8)
-impl<T> core::convert::From<T> for rsiprtp::srtp::dtls::DtlsRole
-pub fn rsiprtp::srtp::dtls::DtlsRole::from(t: T) -> T
-impl<T> downcast_rs::Downcast for rsiprtp::srtp::dtls::DtlsRole where T: core::any::Any
-pub fn rsiprtp::srtp::dtls::DtlsRole::as_any(&self) -> &(dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::DtlsRole::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::DtlsRole::into_any(self: alloc::boxed::Box<T>) -> alloc::boxed::Box<dyn core::any::Any>
-pub fn rsiprtp::srtp::dtls::DtlsRole::into_any_rc(self: alloc::rc::Rc<T>) -> alloc::rc::Rc<dyn core::any::Any>
-impl<T> downcast_rs::DowncastSync for rsiprtp::srtp::dtls::DtlsRole where T: core::any::Any + core::marker::Send + core::marker::Sync
-pub fn rsiprtp::srtp::dtls::DtlsRole::into_any_arc(self: alloc::sync::Arc<T>) -> alloc::sync::Arc<(dyn core::any::Any + core::marker::Send + core::marker::Sync)>
-impl<T> tracing::instrument::Instrument for rsiprtp::srtp::dtls::DtlsRole
-impl<T> tracing::instrument::WithSubscriber for rsiprtp::srtp::dtls::DtlsRole
-impl<T> typenum::type_operators::Same for rsiprtp::srtp::dtls::DtlsRole
-pub type rsiprtp::srtp::dtls::DtlsRole::Output = T
-impl<V, T> ppv_lite86::types::VZip<V> for rsiprtp::srtp::dtls::DtlsRole where V: ppv_lite86::types::MultiLane<T>
-pub fn rsiprtp::srtp::dtls::DtlsRole::vzip(self) -> V
-pub enum rsiprtp::srtp::dtls::DtlsState
-pub rsiprtp::srtp::dtls::DtlsState::Closed
-pub rsiprtp::srtp::dtls::DtlsState::Connected
-pub rsiprtp::srtp::dtls::DtlsState::Connecting
-pub rsiprtp::srtp::dtls::DtlsState::Failed
-pub rsiprtp::srtp::dtls::DtlsState::New
-impl core::clone::Clone for rsiprtp::srtp::dtls::DtlsState
-pub fn rsiprtp::srtp::dtls::DtlsState::clone(&self) -> rsiprtp::srtp::dtls::DtlsState
-impl core::cmp::Eq for rsiprtp::srtp::dtls::DtlsState
-impl core::cmp::PartialEq for rsiprtp::srtp::dtls::DtlsState
-pub fn rsiprtp::srtp::dtls::DtlsState::eq(&self, other: &rsiprtp::srtp::dtls::DtlsState) -> bool
-impl core::fmt::Debug for rsiprtp::srtp::dtls::DtlsState
-pub fn rsiprtp::srtp::dtls::DtlsState::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for rsiprtp::srtp::dtls::DtlsState
-impl core::marker::StructuralPartialEq for rsiprtp::srtp::dtls::DtlsState
-impl core::marker::Freeze for rsiprtp::srtp::dtls::DtlsState
-impl core::marker::Send for rsiprtp::srtp::dtls::DtlsState
-impl core::marker::Sync for rsiprtp::srtp::dtls::DtlsState
-impl core::marker::Unpin for rsiprtp::srtp::dtls::DtlsState
-impl core::marker::UnsafeUnpin for rsiprtp::srtp::dtls::DtlsState
-impl core::panic::unwind_safe::RefUnwindSafe for rsiprtp::srtp::dtls::DtlsState
-impl core::panic::unwind_safe::UnwindSafe for rsiprtp::srtp::dtls::DtlsState
-impl<T, U> core::convert::Into<U> for rsiprtp::srtp::dtls::DtlsState where U: core::convert::From<T>
-pub fn rsiprtp::srtp::dtls::DtlsState::into(self) -> U
-impl<T, U> core::convert::TryFrom<U> for rsiprtp::srtp::dtls::DtlsState where U: core::convert::Into<T>
-pub type rsiprtp::srtp::dtls::DtlsState::Error = core::convert::Infallible
-pub fn rsiprtp::srtp::dtls::DtlsState::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
-impl<T, U> core::convert::TryInto<U> for rsiprtp::srtp::dtls::DtlsState where U: core::convert::TryFrom<T>
-pub type rsiprtp::srtp::dtls::DtlsState::Error = <U as core::convert::TryFrom<T>>::Error
-pub fn rsiprtp::srtp::dtls::DtlsState::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
-impl<T> alloc::borrow::ToOwned for rsiprtp::srtp::dtls::DtlsState where T: core::clone::Clone
-pub type rsiprtp::srtp::dtls::DtlsState::Owned = T
-pub fn rsiprtp::srtp::dtls::DtlsState::clone_into(&self, target: &mut T)
-pub fn rsiprtp::srtp::dtls::DtlsState::to_owned(&self) -> T
-impl<T> core::any::Any for rsiprtp::srtp::dtls::DtlsState where T: 'static + ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsState::type_id(&self) -> core::any::TypeId
-impl<T> core::borrow::Borrow<T> for rsiprtp::srtp::dtls::DtlsState where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsState::borrow(&self) -> &T
-impl<T> core::borrow::BorrowMut<T> for rsiprtp::srtp::dtls::DtlsState where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsState::borrow_mut(&mut self) -> &mut T
-impl<T> core::clone::CloneToUninit for rsiprtp::srtp::dtls::DtlsState where T: core::clone::Clone
-pub unsafe fn rsiprtp::srtp::dtls::DtlsState::clone_to_uninit(&self, dest: *mut u8)
-impl<T> core::convert::From<T> for rsiprtp::srtp::dtls::DtlsState
-pub fn rsiprtp::srtp::dtls::DtlsState::from(t: T) -> T
-impl<T> downcast_rs::Downcast for rsiprtp::srtp::dtls::DtlsState where T: core::any::Any
-pub fn rsiprtp::srtp::dtls::DtlsState::as_any(&self) -> &(dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::DtlsState::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::DtlsState::into_any(self: alloc::boxed::Box<T>) -> alloc::boxed::Box<dyn core::any::Any>
-pub fn rsiprtp::srtp::dtls::DtlsState::into_any_rc(self: alloc::rc::Rc<T>) -> alloc::rc::Rc<dyn core::any::Any>
-impl<T> downcast_rs::DowncastSync for rsiprtp::srtp::dtls::DtlsState where T: core::any::Any + core::marker::Send + core::marker::Sync
-pub fn rsiprtp::srtp::dtls::DtlsState::into_any_arc(self: alloc::sync::Arc<T>) -> alloc::sync::Arc<(dyn core::any::Any + core::marker::Send + core::marker::Sync)>
-impl<T> tracing::instrument::Instrument for rsiprtp::srtp::dtls::DtlsState
-impl<T> tracing::instrument::WithSubscriber for rsiprtp::srtp::dtls::DtlsState
-impl<T> typenum::type_operators::Same for rsiprtp::srtp::dtls::DtlsState
-pub type rsiprtp::srtp::dtls::DtlsState::Output = T
-impl<V, T> ppv_lite86::types::VZip<V> for rsiprtp::srtp::dtls::DtlsState where V: ppv_lite86::types::MultiLane<T>
-pub fn rsiprtp::srtp::dtls::DtlsState::vzip(self) -> V
-pub enum rsiprtp::srtp::dtls::FingerprintHash
-pub rsiprtp::srtp::dtls::FingerprintHash::Sha1
-pub rsiprtp::srtp::dtls::FingerprintHash::Sha256
-impl rsiprtp::srtp::dtls::FingerprintHash
-pub fn rsiprtp::srtp::dtls::FingerprintHash::from_sdp(s: &str) -> core::option::Option<Self>
-pub fn rsiprtp::srtp::dtls::FingerprintHash::to_sdp(&self) -> &'static str
-impl core::clone::Clone for rsiprtp::srtp::dtls::FingerprintHash
-pub fn rsiprtp::srtp::dtls::FingerprintHash::clone(&self) -> rsiprtp::srtp::dtls::FingerprintHash
-impl core::cmp::Eq for rsiprtp::srtp::dtls::FingerprintHash
-impl core::cmp::PartialEq for rsiprtp::srtp::dtls::FingerprintHash
-pub fn rsiprtp::srtp::dtls::FingerprintHash::eq(&self, other: &rsiprtp::srtp::dtls::FingerprintHash) -> bool
-impl core::fmt::Debug for rsiprtp::srtp::dtls::FingerprintHash
-pub fn rsiprtp::srtp::dtls::FingerprintHash::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for rsiprtp::srtp::dtls::FingerprintHash
-impl core::marker::StructuralPartialEq for rsiprtp::srtp::dtls::FingerprintHash
-impl core::marker::Freeze for rsiprtp::srtp::dtls::FingerprintHash
-impl core::marker::Send for rsiprtp::srtp::dtls::FingerprintHash
-impl core::marker::Sync for rsiprtp::srtp::dtls::FingerprintHash
-impl core::marker::Unpin for rsiprtp::srtp::dtls::FingerprintHash
-impl core::marker::UnsafeUnpin for rsiprtp::srtp::dtls::FingerprintHash
-impl core::panic::unwind_safe::RefUnwindSafe for rsiprtp::srtp::dtls::FingerprintHash
-impl core::panic::unwind_safe::UnwindSafe for rsiprtp::srtp::dtls::FingerprintHash
-impl<T, U> core::convert::Into<U> for rsiprtp::srtp::dtls::FingerprintHash where U: core::convert::From<T>
-pub fn rsiprtp::srtp::dtls::FingerprintHash::into(self) -> U
-impl<T, U> core::convert::TryFrom<U> for rsiprtp::srtp::dtls::FingerprintHash where U: core::convert::Into<T>
-pub type rsiprtp::srtp::dtls::FingerprintHash::Error = core::convert::Infallible
-pub fn rsiprtp::srtp::dtls::FingerprintHash::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
-impl<T, U> core::convert::TryInto<U> for rsiprtp::srtp::dtls::FingerprintHash where U: core::convert::TryFrom<T>
-pub type rsiprtp::srtp::dtls::FingerprintHash::Error = <U as core::convert::TryFrom<T>>::Error
-pub fn rsiprtp::srtp::dtls::FingerprintHash::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
-impl<T> alloc::borrow::ToOwned for rsiprtp::srtp::dtls::FingerprintHash where T: core::clone::Clone
-pub type rsiprtp::srtp::dtls::FingerprintHash::Owned = T
-pub fn rsiprtp::srtp::dtls::FingerprintHash::clone_into(&self, target: &mut T)
-pub fn rsiprtp::srtp::dtls::FingerprintHash::to_owned(&self) -> T
-impl<T> core::any::Any for rsiprtp::srtp::dtls::FingerprintHash where T: 'static + ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::FingerprintHash::type_id(&self) -> core::any::TypeId
-impl<T> core::borrow::Borrow<T> for rsiprtp::srtp::dtls::FingerprintHash where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::FingerprintHash::borrow(&self) -> &T
-impl<T> core::borrow::BorrowMut<T> for rsiprtp::srtp::dtls::FingerprintHash where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::FingerprintHash::borrow_mut(&mut self) -> &mut T
-impl<T> core::clone::CloneToUninit for rsiprtp::srtp::dtls::FingerprintHash where T: core::clone::Clone
-pub unsafe fn rsiprtp::srtp::dtls::FingerprintHash::clone_to_uninit(&self, dest: *mut u8)
-impl<T> core::convert::From<T> for rsiprtp::srtp::dtls::FingerprintHash
-pub fn rsiprtp::srtp::dtls::FingerprintHash::from(t: T) -> T
-impl<T> downcast_rs::Downcast for rsiprtp::srtp::dtls::FingerprintHash where T: core::any::Any
-pub fn rsiprtp::srtp::dtls::FingerprintHash::as_any(&self) -> &(dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::FingerprintHash::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::FingerprintHash::into_any(self: alloc::boxed::Box<T>) -> alloc::boxed::Box<dyn core::any::Any>
-pub fn rsiprtp::srtp::dtls::FingerprintHash::into_any_rc(self: alloc::rc::Rc<T>) -> alloc::rc::Rc<dyn core::any::Any>
-impl<T> downcast_rs::DowncastSync for rsiprtp::srtp::dtls::FingerprintHash where T: core::any::Any + core::marker::Send + core::marker::Sync
-pub fn rsiprtp::srtp::dtls::FingerprintHash::into_any_arc(self: alloc::sync::Arc<T>) -> alloc::sync::Arc<(dyn core::any::Any + core::marker::Send + core::marker::Sync)>
-impl<T> tracing::instrument::Instrument for rsiprtp::srtp::dtls::FingerprintHash
-impl<T> tracing::instrument::WithSubscriber for rsiprtp::srtp::dtls::FingerprintHash
-impl<T> typenum::type_operators::Same for rsiprtp::srtp::dtls::FingerprintHash
-pub type rsiprtp::srtp::dtls::FingerprintHash::Output = T
-impl<V, T> ppv_lite86::types::VZip<V> for rsiprtp::srtp::dtls::FingerprintHash where V: ppv_lite86::types::MultiLane<T>
-pub fn rsiprtp::srtp::dtls::FingerprintHash::vzip(self) -> V
-pub enum rsiprtp::srtp::dtls::SrtpProfile
-pub rsiprtp::srtp::dtls::SrtpProfile::Aes128CmHmacSha1_32
-pub rsiprtp::srtp::dtls::SrtpProfile::Aes128CmHmacSha1_80
-pub rsiprtp::srtp::dtls::SrtpProfile::Aes256CmHmacSha1_32
-pub rsiprtp::srtp::dtls::SrtpProfile::Aes256CmHmacSha1_80
-impl rsiprtp::srtp::dtls::SrtpProfile
-pub fn rsiprtp::srtp::dtls::SrtpProfile::from_id(id: u16) -> core::option::Option<Self>
-pub fn rsiprtp::srtp::dtls::SrtpProfile::id(&self) -> u16
-pub fn rsiprtp::srtp::dtls::SrtpProfile::key_length(&self) -> usize
-pub fn rsiprtp::srtp::dtls::SrtpProfile::keying_material_length(&self) -> usize
-pub fn rsiprtp::srtp::dtls::SrtpProfile::salt_length(&self) -> usize
-impl core::clone::Clone for rsiprtp::srtp::dtls::SrtpProfile
-pub fn rsiprtp::srtp::dtls::SrtpProfile::clone(&self) -> rsiprtp::srtp::dtls::SrtpProfile
-impl core::cmp::Eq for rsiprtp::srtp::dtls::SrtpProfile
-impl core::cmp::PartialEq for rsiprtp::srtp::dtls::SrtpProfile
-pub fn rsiprtp::srtp::dtls::SrtpProfile::eq(&self, other: &rsiprtp::srtp::dtls::SrtpProfile) -> bool
-impl core::fmt::Debug for rsiprtp::srtp::dtls::SrtpProfile
-pub fn rsiprtp::srtp::dtls::SrtpProfile::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for rsiprtp::srtp::dtls::SrtpProfile
-impl core::marker::StructuralPartialEq for rsiprtp::srtp::dtls::SrtpProfile
-impl core::marker::Freeze for rsiprtp::srtp::dtls::SrtpProfile
-impl core::marker::Send for rsiprtp::srtp::dtls::SrtpProfile
-impl core::marker::Sync for rsiprtp::srtp::dtls::SrtpProfile
-impl core::marker::Unpin for rsiprtp::srtp::dtls::SrtpProfile
-impl core::marker::UnsafeUnpin for rsiprtp::srtp::dtls::SrtpProfile
-impl core::panic::unwind_safe::RefUnwindSafe for rsiprtp::srtp::dtls::SrtpProfile
-impl core::panic::unwind_safe::UnwindSafe for rsiprtp::srtp::dtls::SrtpProfile
-impl<T, U> core::convert::Into<U> for rsiprtp::srtp::dtls::SrtpProfile where U: core::convert::From<T>
-pub fn rsiprtp::srtp::dtls::SrtpProfile::into(self) -> U
-impl<T, U> core::convert::TryFrom<U> for rsiprtp::srtp::dtls::SrtpProfile where U: core::convert::Into<T>
-pub type rsiprtp::srtp::dtls::SrtpProfile::Error = core::convert::Infallible
-pub fn rsiprtp::srtp::dtls::SrtpProfile::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
-impl<T, U> core::convert::TryInto<U> for rsiprtp::srtp::dtls::SrtpProfile where U: core::convert::TryFrom<T>
-pub type rsiprtp::srtp::dtls::SrtpProfile::Error = <U as core::convert::TryFrom<T>>::Error
-pub fn rsiprtp::srtp::dtls::SrtpProfile::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
-impl<T> alloc::borrow::ToOwned for rsiprtp::srtp::dtls::SrtpProfile where T: core::clone::Clone
-pub type rsiprtp::srtp::dtls::SrtpProfile::Owned = T
-pub fn rsiprtp::srtp::dtls::SrtpProfile::clone_into(&self, target: &mut T)
-pub fn rsiprtp::srtp::dtls::SrtpProfile::to_owned(&self) -> T
-impl<T> core::any::Any for rsiprtp::srtp::dtls::SrtpProfile where T: 'static + ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::SrtpProfile::type_id(&self) -> core::any::TypeId
-impl<T> core::borrow::Borrow<T> for rsiprtp::srtp::dtls::SrtpProfile where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::SrtpProfile::borrow(&self) -> &T
-impl<T> core::borrow::BorrowMut<T> for rsiprtp::srtp::dtls::SrtpProfile where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::SrtpProfile::borrow_mut(&mut self) -> &mut T
-impl<T> core::clone::CloneToUninit for rsiprtp::srtp::dtls::SrtpProfile where T: core::clone::Clone
-pub unsafe fn rsiprtp::srtp::dtls::SrtpProfile::clone_to_uninit(&self, dest: *mut u8)
-impl<T> core::convert::From<T> for rsiprtp::srtp::dtls::SrtpProfile
-pub fn rsiprtp::srtp::dtls::SrtpProfile::from(t: T) -> T
-impl<T> downcast_rs::Downcast for rsiprtp::srtp::dtls::SrtpProfile where T: core::any::Any
-pub fn rsiprtp::srtp::dtls::SrtpProfile::as_any(&self) -> &(dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::SrtpProfile::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::SrtpProfile::into_any(self: alloc::boxed::Box<T>) -> alloc::boxed::Box<dyn core::any::Any>
-pub fn rsiprtp::srtp::dtls::SrtpProfile::into_any_rc(self: alloc::rc::Rc<T>) -> alloc::rc::Rc<dyn core::any::Any>
-impl<T> downcast_rs::DowncastSync for rsiprtp::srtp::dtls::SrtpProfile where T: core::any::Any + core::marker::Send + core::marker::Sync
-pub fn rsiprtp::srtp::dtls::SrtpProfile::into_any_arc(self: alloc::sync::Arc<T>) -> alloc::sync::Arc<(dyn core::any::Any + core::marker::Send + core::marker::Sync)>
-impl<T> tracing::instrument::Instrument for rsiprtp::srtp::dtls::SrtpProfile
-impl<T> tracing::instrument::WithSubscriber for rsiprtp::srtp::dtls::SrtpProfile
-impl<T> typenum::type_operators::Same for rsiprtp::srtp::dtls::SrtpProfile
-pub type rsiprtp::srtp::dtls::SrtpProfile::Output = T
-impl<V, T> ppv_lite86::types::VZip<V> for rsiprtp::srtp::dtls::SrtpProfile where V: ppv_lite86::types::MultiLane<T>
-pub fn rsiprtp::srtp::dtls::SrtpProfile::vzip(self) -> V
-pub struct rsiprtp::srtp::dtls::DtlsConfig
-pub rsiprtp::srtp::dtls::DtlsConfig::fingerprint_hash: rsiprtp::srtp::dtls::FingerprintHash
-pub rsiprtp::srtp::dtls::DtlsConfig::role: rsiprtp::srtp::dtls::DtlsRole
-pub rsiprtp::srtp::dtls::DtlsConfig::srtp_profiles: alloc::vec::Vec<rsiprtp::srtp::dtls::SrtpProfile>
-impl core::clone::Clone for rsiprtp::srtp::dtls::DtlsConfig
-pub fn rsiprtp::srtp::dtls::DtlsConfig::clone(&self) -> rsiprtp::srtp::dtls::DtlsConfig
-impl core::default::Default for rsiprtp::srtp::dtls::DtlsConfig
-pub fn rsiprtp::srtp::dtls::DtlsConfig::default() -> Self
-impl core::fmt::Debug for rsiprtp::srtp::dtls::DtlsConfig
-pub fn rsiprtp::srtp::dtls::DtlsConfig::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Freeze for rsiprtp::srtp::dtls::DtlsConfig
-impl core::marker::Send for rsiprtp::srtp::dtls::DtlsConfig
-impl core::marker::Sync for rsiprtp::srtp::dtls::DtlsConfig
-impl core::marker::Unpin for rsiprtp::srtp::dtls::DtlsConfig
-impl core::marker::UnsafeUnpin for rsiprtp::srtp::dtls::DtlsConfig
-impl core::panic::unwind_safe::RefUnwindSafe for rsiprtp::srtp::dtls::DtlsConfig
-impl core::panic::unwind_safe::UnwindSafe for rsiprtp::srtp::dtls::DtlsConfig
-impl<T, U> core::convert::Into<U> for rsiprtp::srtp::dtls::DtlsConfig where U: core::convert::From<T>
-pub fn rsiprtp::srtp::dtls::DtlsConfig::into(self) -> U
-impl<T, U> core::convert::TryFrom<U> for rsiprtp::srtp::dtls::DtlsConfig where U: core::convert::Into<T>
-pub type rsiprtp::srtp::dtls::DtlsConfig::Error = core::convert::Infallible
-pub fn rsiprtp::srtp::dtls::DtlsConfig::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
-impl<T, U> core::convert::TryInto<U> for rsiprtp::srtp::dtls::DtlsConfig where U: core::convert::TryFrom<T>
-pub type rsiprtp::srtp::dtls::DtlsConfig::Error = <U as core::convert::TryFrom<T>>::Error
-pub fn rsiprtp::srtp::dtls::DtlsConfig::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
-impl<T> alloc::borrow::ToOwned for rsiprtp::srtp::dtls::DtlsConfig where T: core::clone::Clone
-pub type rsiprtp::srtp::dtls::DtlsConfig::Owned = T
-pub fn rsiprtp::srtp::dtls::DtlsConfig::clone_into(&self, target: &mut T)
-pub fn rsiprtp::srtp::dtls::DtlsConfig::to_owned(&self) -> T
-impl<T> core::any::Any for rsiprtp::srtp::dtls::DtlsConfig where T: 'static + ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsConfig::type_id(&self) -> core::any::TypeId
-impl<T> core::borrow::Borrow<T> for rsiprtp::srtp::dtls::DtlsConfig where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsConfig::borrow(&self) -> &T
-impl<T> core::borrow::BorrowMut<T> for rsiprtp::srtp::dtls::DtlsConfig where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsConfig::borrow_mut(&mut self) -> &mut T
-impl<T> core::clone::CloneToUninit for rsiprtp::srtp::dtls::DtlsConfig where T: core::clone::Clone
-pub unsafe fn rsiprtp::srtp::dtls::DtlsConfig::clone_to_uninit(&self, dest: *mut u8)
-impl<T> core::convert::From<T> for rsiprtp::srtp::dtls::DtlsConfig
-pub fn rsiprtp::srtp::dtls::DtlsConfig::from(t: T) -> T
-impl<T> downcast_rs::Downcast for rsiprtp::srtp::dtls::DtlsConfig where T: core::any::Any
-pub fn rsiprtp::srtp::dtls::DtlsConfig::as_any(&self) -> &(dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::DtlsConfig::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::DtlsConfig::into_any(self: alloc::boxed::Box<T>) -> alloc::boxed::Box<dyn core::any::Any>
-pub fn rsiprtp::srtp::dtls::DtlsConfig::into_any_rc(self: alloc::rc::Rc<T>) -> alloc::rc::Rc<dyn core::any::Any>
-impl<T> downcast_rs::DowncastSync for rsiprtp::srtp::dtls::DtlsConfig where T: core::any::Any + core::marker::Send + core::marker::Sync
-pub fn rsiprtp::srtp::dtls::DtlsConfig::into_any_arc(self: alloc::sync::Arc<T>) -> alloc::sync::Arc<(dyn core::any::Any + core::marker::Send + core::marker::Sync)>
-impl<T> tracing::instrument::Instrument for rsiprtp::srtp::dtls::DtlsConfig
-impl<T> tracing::instrument::WithSubscriber for rsiprtp::srtp::dtls::DtlsConfig
-impl<T> typenum::type_operators::Same for rsiprtp::srtp::dtls::DtlsConfig
-pub type rsiprtp::srtp::dtls::DtlsConfig::Output = T
-impl<V, T> ppv_lite86::types::VZip<V> for rsiprtp::srtp::dtls::DtlsConfig where V: ppv_lite86::types::MultiLane<T>
-pub fn rsiprtp::srtp::dtls::DtlsConfig::vzip(self) -> V
-pub struct rsiprtp::srtp::dtls::DtlsSrtpKeys
-pub rsiprtp::srtp::dtls::DtlsSrtpKeys::client_write_key: alloc::vec::Vec<u8>
-pub rsiprtp::srtp::dtls::DtlsSrtpKeys::client_write_salt: alloc::vec::Vec<u8>
-pub rsiprtp::srtp::dtls::DtlsSrtpKeys::profile: rsiprtp::srtp::dtls::SrtpProfile
-pub rsiprtp::srtp::dtls::DtlsSrtpKeys::server_write_key: alloc::vec::Vec<u8>
-pub rsiprtp::srtp::dtls::DtlsSrtpKeys::server_write_salt: alloc::vec::Vec<u8>
-impl rsiprtp::srtp::dtls::DtlsSrtpKeys
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::local_keys(&self, role: rsiprtp::srtp::dtls::DtlsRole) -> (&[u8], &[u8])
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::remote_keys(&self, role: rsiprtp::srtp::dtls::DtlsRole) -> (&[u8], &[u8])
-impl core::clone::Clone for rsiprtp::srtp::dtls::DtlsSrtpKeys
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::clone(&self) -> rsiprtp::srtp::dtls::DtlsSrtpKeys
-impl core::fmt::Debug for rsiprtp::srtp::dtls::DtlsSrtpKeys
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Freeze for rsiprtp::srtp::dtls::DtlsSrtpKeys
-impl core::marker::Send for rsiprtp::srtp::dtls::DtlsSrtpKeys
-impl core::marker::Sync for rsiprtp::srtp::dtls::DtlsSrtpKeys
-impl core::marker::Unpin for rsiprtp::srtp::dtls::DtlsSrtpKeys
-impl core::marker::UnsafeUnpin for rsiprtp::srtp::dtls::DtlsSrtpKeys
-impl core::panic::unwind_safe::RefUnwindSafe for rsiprtp::srtp::dtls::DtlsSrtpKeys
-impl core::panic::unwind_safe::UnwindSafe for rsiprtp::srtp::dtls::DtlsSrtpKeys
-impl<T, U> core::convert::Into<U> for rsiprtp::srtp::dtls::DtlsSrtpKeys where U: core::convert::From<T>
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::into(self) -> U
-impl<T, U> core::convert::TryFrom<U> for rsiprtp::srtp::dtls::DtlsSrtpKeys where U: core::convert::Into<T>
-pub type rsiprtp::srtp::dtls::DtlsSrtpKeys::Error = core::convert::Infallible
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
-impl<T, U> core::convert::TryInto<U> for rsiprtp::srtp::dtls::DtlsSrtpKeys where U: core::convert::TryFrom<T>
-pub type rsiprtp::srtp::dtls::DtlsSrtpKeys::Error = <U as core::convert::TryFrom<T>>::Error
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
-impl<T> alloc::borrow::ToOwned for rsiprtp::srtp::dtls::DtlsSrtpKeys where T: core::clone::Clone
-pub type rsiprtp::srtp::dtls::DtlsSrtpKeys::Owned = T
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::clone_into(&self, target: &mut T)
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::to_owned(&self) -> T
-impl<T> core::any::Any for rsiprtp::srtp::dtls::DtlsSrtpKeys where T: 'static + ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::type_id(&self) -> core::any::TypeId
-impl<T> core::borrow::Borrow<T> for rsiprtp::srtp::dtls::DtlsSrtpKeys where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::borrow(&self) -> &T
-impl<T> core::borrow::BorrowMut<T> for rsiprtp::srtp::dtls::DtlsSrtpKeys where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::borrow_mut(&mut self) -> &mut T
-impl<T> core::clone::CloneToUninit for rsiprtp::srtp::dtls::DtlsSrtpKeys where T: core::clone::Clone
-pub unsafe fn rsiprtp::srtp::dtls::DtlsSrtpKeys::clone_to_uninit(&self, dest: *mut u8)
-impl<T> core::convert::From<T> for rsiprtp::srtp::dtls::DtlsSrtpKeys
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::from(t: T) -> T
-impl<T> downcast_rs::Downcast for rsiprtp::srtp::dtls::DtlsSrtpKeys where T: core::any::Any
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::as_any(&self) -> &(dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::into_any(self: alloc::boxed::Box<T>) -> alloc::boxed::Box<dyn core::any::Any>
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::into_any_rc(self: alloc::rc::Rc<T>) -> alloc::rc::Rc<dyn core::any::Any>
-impl<T> downcast_rs::DowncastSync for rsiprtp::srtp::dtls::DtlsSrtpKeys where T: core::any::Any + core::marker::Send + core::marker::Sync
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::into_any_arc(self: alloc::sync::Arc<T>) -> alloc::sync::Arc<(dyn core::any::Any + core::marker::Send + core::marker::Sync)>
-impl<T> tracing::instrument::Instrument for rsiprtp::srtp::dtls::DtlsSrtpKeys
-impl<T> tracing::instrument::WithSubscriber for rsiprtp::srtp::dtls::DtlsSrtpKeys
-impl<T> typenum::type_operators::Same for rsiprtp::srtp::dtls::DtlsSrtpKeys
-pub type rsiprtp::srtp::dtls::DtlsSrtpKeys::Output = T
-impl<V, T> ppv_lite86::types::VZip<V> for rsiprtp::srtp::dtls::DtlsSrtpKeys where V: ppv_lite86::types::MultiLane<T>
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::vzip(self) -> V
-pub struct rsiprtp::srtp::dtls::Fingerprint
-pub rsiprtp::srtp::dtls::Fingerprint::algorithm: rsiprtp::srtp::dtls::FingerprintHash
-pub rsiprtp::srtp::dtls::Fingerprint::value: alloc::vec::Vec<u8>
-impl rsiprtp::srtp::dtls::Fingerprint
-pub fn rsiprtp::srtp::dtls::Fingerprint::from_certificate_der(cert_der: &[u8], algorithm: rsiprtp::srtp::dtls::FingerprintHash) -> Self
-pub fn rsiprtp::srtp::dtls::Fingerprint::parse(s: &str) -> core::option::Option<Self>
-pub fn rsiprtp::srtp::dtls::Fingerprint::to_sdp(&self) -> alloc::string::String
-pub fn rsiprtp::srtp::dtls::Fingerprint::verify(&self, other: &rsiprtp::srtp::dtls::Fingerprint) -> bool
-impl core::clone::Clone for rsiprtp::srtp::dtls::Fingerprint
-pub fn rsiprtp::srtp::dtls::Fingerprint::clone(&self) -> rsiprtp::srtp::dtls::Fingerprint
-impl core::fmt::Debug for rsiprtp::srtp::dtls::Fingerprint
-pub fn rsiprtp::srtp::dtls::Fingerprint::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Freeze for rsiprtp::srtp::dtls::Fingerprint
-impl core::marker::Send for rsiprtp::srtp::dtls::Fingerprint
-impl core::marker::Sync for rsiprtp::srtp::dtls::Fingerprint
-impl core::marker::Unpin for rsiprtp::srtp::dtls::Fingerprint
-impl core::marker::UnsafeUnpin for rsiprtp::srtp::dtls::Fingerprint
-impl core::panic::unwind_safe::RefUnwindSafe for rsiprtp::srtp::dtls::Fingerprint
-impl core::panic::unwind_safe::UnwindSafe for rsiprtp::srtp::dtls::Fingerprint
-impl<T, U> core::convert::Into<U> for rsiprtp::srtp::dtls::Fingerprint where U: core::convert::From<T>
-pub fn rsiprtp::srtp::dtls::Fingerprint::into(self) -> U
-impl<T, U> core::convert::TryFrom<U> for rsiprtp::srtp::dtls::Fingerprint where U: core::convert::Into<T>
-pub type rsiprtp::srtp::dtls::Fingerprint::Error = core::convert::Infallible
-pub fn rsiprtp::srtp::dtls::Fingerprint::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
-impl<T, U> core::convert::TryInto<U> for rsiprtp::srtp::dtls::Fingerprint where U: core::convert::TryFrom<T>
-pub type rsiprtp::srtp::dtls::Fingerprint::Error = <U as core::convert::TryFrom<T>>::Error
-pub fn rsiprtp::srtp::dtls::Fingerprint::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
-impl<T> alloc::borrow::ToOwned for rsiprtp::srtp::dtls::Fingerprint where T: core::clone::Clone
-pub type rsiprtp::srtp::dtls::Fingerprint::Owned = T
-pub fn rsiprtp::srtp::dtls::Fingerprint::clone_into(&self, target: &mut T)
-pub fn rsiprtp::srtp::dtls::Fingerprint::to_owned(&self) -> T
-impl<T> core::any::Any for rsiprtp::srtp::dtls::Fingerprint where T: 'static + ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::Fingerprint::type_id(&self) -> core::any::TypeId
-impl<T> core::borrow::Borrow<T> for rsiprtp::srtp::dtls::Fingerprint where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::Fingerprint::borrow(&self) -> &T
-impl<T> core::borrow::BorrowMut<T> for rsiprtp::srtp::dtls::Fingerprint where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::Fingerprint::borrow_mut(&mut self) -> &mut T
-impl<T> core::clone::CloneToUninit for rsiprtp::srtp::dtls::Fingerprint where T: core::clone::Clone
-pub unsafe fn rsiprtp::srtp::dtls::Fingerprint::clone_to_uninit(&self, dest: *mut u8)
-impl<T> core::convert::From<T> for rsiprtp::srtp::dtls::Fingerprint
-pub fn rsiprtp::srtp::dtls::Fingerprint::from(t: T) -> T
-impl<T> downcast_rs::Downcast for rsiprtp::srtp::dtls::Fingerprint where T: core::any::Any
-pub fn rsiprtp::srtp::dtls::Fingerprint::as_any(&self) -> &(dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::Fingerprint::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::Fingerprint::into_any(self: alloc::boxed::Box<T>) -> alloc::boxed::Box<dyn core::any::Any>
-pub fn rsiprtp::srtp::dtls::Fingerprint::into_any_rc(self: alloc::rc::Rc<T>) -> alloc::rc::Rc<dyn core::any::Any>
-impl<T> downcast_rs::DowncastSync for rsiprtp::srtp::dtls::Fingerprint where T: core::any::Any + core::marker::Send + core::marker::Sync
-pub fn rsiprtp::srtp::dtls::Fingerprint::into_any_arc(self: alloc::sync::Arc<T>) -> alloc::sync::Arc<(dyn core::any::Any + core::marker::Send + core::marker::Sync)>
-impl<T> tracing::instrument::Instrument for rsiprtp::srtp::dtls::Fingerprint
-impl<T> tracing::instrument::WithSubscriber for rsiprtp::srtp::dtls::Fingerprint
-impl<T> typenum::type_operators::Same for rsiprtp::srtp::dtls::Fingerprint
-pub type rsiprtp::srtp::dtls::Fingerprint::Output = T
-impl<V, T> ppv_lite86::types::VZip<V> for rsiprtp::srtp::dtls::Fingerprint where V: ppv_lite86::types::MultiLane<T>
-pub fn rsiprtp::srtp::dtls::Fingerprint::vzip(self) -> V
-pub fn rsiprtp::srtp::dtls::build_use_srtp_extension(profiles: &[rsiprtp::srtp::dtls::SrtpProfile]) -> alloc::vec::Vec<u8>
-pub fn rsiprtp::srtp::dtls::extract_srtp_keys(exported: &[u8], profile: rsiprtp::srtp::dtls::SrtpProfile) -> core::option::Option<rsiprtp::srtp::dtls::DtlsSrtpKeys>
-pub fn rsiprtp::srtp::dtls::parse_use_srtp_extension(data: &[u8]) -> core::option::Option<rsiprtp::srtp::dtls::SrtpProfile>
 pub enum rsiprtp::srtp::CryptoSuite
 pub rsiprtp::srtp::CryptoSuite::AesCm128HmacSha1_32
 pub rsiprtp::srtp::CryptoSuite::AesCm128HmacSha1_80
@@ -15120,454 +14830,6 @@ impl<T> typenum::type_operators::Same for rsiprtp::srtp::CryptoSuite
 pub type rsiprtp::srtp::CryptoSuite::Output = T
 impl<V, T> ppv_lite86::types::VZip<V> for rsiprtp::srtp::CryptoSuite where V: ppv_lite86::types::MultiLane<T>
 pub fn rsiprtp::srtp::CryptoSuite::vzip(self) -> V
-pub enum rsiprtp::srtp::DtlsError
-pub rsiprtp::srtp::DtlsError::FingerprintMismatch
-pub rsiprtp::srtp::DtlsError::HandshakeFailed(alloc::string::String)
-pub rsiprtp::srtp::DtlsError::InvalidState(alloc::string::String)
-pub rsiprtp::srtp::DtlsError::Io(std::io::error::Error)
-pub rsiprtp::srtp::DtlsError::KeyExportFailed(alloc::string::String)
-pub rsiprtp::srtp::DtlsError::OpenSsl(alloc::string::String)
-impl core::convert::From<std::io::error::Error> for rsiprtp::srtp::dtls::DtlsError
-pub fn rsiprtp::srtp::dtls::DtlsError::from(source: std::io::error::Error) -> Self
-impl core::error::Error for rsiprtp::srtp::dtls::DtlsError
-pub fn rsiprtp::srtp::dtls::DtlsError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
-impl core::fmt::Debug for rsiprtp::srtp::dtls::DtlsError
-pub fn rsiprtp::srtp::dtls::DtlsError::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::fmt::Display for rsiprtp::srtp::dtls::DtlsError
-pub fn rsiprtp::srtp::dtls::DtlsError::fmt(&self, __formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Freeze for rsiprtp::srtp::dtls::DtlsError
-impl core::marker::Send for rsiprtp::srtp::dtls::DtlsError
-impl core::marker::Sync for rsiprtp::srtp::dtls::DtlsError
-impl core::marker::Unpin for rsiprtp::srtp::dtls::DtlsError
-impl core::marker::UnsafeUnpin for rsiprtp::srtp::dtls::DtlsError
-impl !core::panic::unwind_safe::RefUnwindSafe for rsiprtp::srtp::dtls::DtlsError
-impl !core::panic::unwind_safe::UnwindSafe for rsiprtp::srtp::dtls::DtlsError
-impl<T, U> core::convert::Into<U> for rsiprtp::srtp::dtls::DtlsError where U: core::convert::From<T>
-pub fn rsiprtp::srtp::dtls::DtlsError::into(self) -> U
-impl<T, U> core::convert::TryFrom<U> for rsiprtp::srtp::dtls::DtlsError where U: core::convert::Into<T>
-pub type rsiprtp::srtp::dtls::DtlsError::Error = core::convert::Infallible
-pub fn rsiprtp::srtp::dtls::DtlsError::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
-impl<T, U> core::convert::TryInto<U> for rsiprtp::srtp::dtls::DtlsError where U: core::convert::TryFrom<T>
-pub type rsiprtp::srtp::dtls::DtlsError::Error = <U as core::convert::TryFrom<T>>::Error
-pub fn rsiprtp::srtp::dtls::DtlsError::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
-impl<T> alloc::string::ToString for rsiprtp::srtp::dtls::DtlsError where T: core::fmt::Display + ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsError::to_string(&self) -> alloc::string::String
-impl<T> core::any::Any for rsiprtp::srtp::dtls::DtlsError where T: 'static + ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsError::type_id(&self) -> core::any::TypeId
-impl<T> core::borrow::Borrow<T> for rsiprtp::srtp::dtls::DtlsError where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsError::borrow(&self) -> &T
-impl<T> core::borrow::BorrowMut<T> for rsiprtp::srtp::dtls::DtlsError where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsError::borrow_mut(&mut self) -> &mut T
-impl<T> core::convert::From<T> for rsiprtp::srtp::dtls::DtlsError
-pub fn rsiprtp::srtp::dtls::DtlsError::from(t: T) -> T
-impl<T> downcast_rs::Downcast for rsiprtp::srtp::dtls::DtlsError where T: core::any::Any
-pub fn rsiprtp::srtp::dtls::DtlsError::as_any(&self) -> &(dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::DtlsError::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::DtlsError::into_any(self: alloc::boxed::Box<T>) -> alloc::boxed::Box<dyn core::any::Any>
-pub fn rsiprtp::srtp::dtls::DtlsError::into_any_rc(self: alloc::rc::Rc<T>) -> alloc::rc::Rc<dyn core::any::Any>
-impl<T> downcast_rs::DowncastSync for rsiprtp::srtp::dtls::DtlsError where T: core::any::Any + core::marker::Send + core::marker::Sync
-pub fn rsiprtp::srtp::dtls::DtlsError::into_any_arc(self: alloc::sync::Arc<T>) -> alloc::sync::Arc<(dyn core::any::Any + core::marker::Send + core::marker::Sync)>
-impl<T> tracing::instrument::Instrument for rsiprtp::srtp::dtls::DtlsError
-impl<T> tracing::instrument::WithSubscriber for rsiprtp::srtp::dtls::DtlsError
-impl<T> typenum::type_operators::Same for rsiprtp::srtp::dtls::DtlsError
-pub type rsiprtp::srtp::dtls::DtlsError::Output = T
-impl<V, T> ppv_lite86::types::VZip<V> for rsiprtp::srtp::dtls::DtlsError where V: ppv_lite86::types::MultiLane<T>
-pub fn rsiprtp::srtp::dtls::DtlsError::vzip(self) -> V
-pub enum rsiprtp::srtp::DtlsRole
-pub rsiprtp::srtp::DtlsRole::ActPass
-pub rsiprtp::srtp::DtlsRole::Client
-pub rsiprtp::srtp::DtlsRole::Server
-impl rsiprtp::srtp::dtls::DtlsRole
-pub fn rsiprtp::srtp::dtls::DtlsRole::from_sdp_setup(setup: &str) -> core::option::Option<Self>
-pub fn rsiprtp::srtp::dtls::DtlsRole::to_sdp_setup(&self) -> &'static str
-impl core::clone::Clone for rsiprtp::srtp::dtls::DtlsRole
-pub fn rsiprtp::srtp::dtls::DtlsRole::clone(&self) -> rsiprtp::srtp::dtls::DtlsRole
-impl core::cmp::Eq for rsiprtp::srtp::dtls::DtlsRole
-impl core::cmp::PartialEq for rsiprtp::srtp::dtls::DtlsRole
-pub fn rsiprtp::srtp::dtls::DtlsRole::eq(&self, other: &rsiprtp::srtp::dtls::DtlsRole) -> bool
-impl core::fmt::Debug for rsiprtp::srtp::dtls::DtlsRole
-pub fn rsiprtp::srtp::dtls::DtlsRole::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for rsiprtp::srtp::dtls::DtlsRole
-impl core::marker::StructuralPartialEq for rsiprtp::srtp::dtls::DtlsRole
-impl core::marker::Freeze for rsiprtp::srtp::dtls::DtlsRole
-impl core::marker::Send for rsiprtp::srtp::dtls::DtlsRole
-impl core::marker::Sync for rsiprtp::srtp::dtls::DtlsRole
-impl core::marker::Unpin for rsiprtp::srtp::dtls::DtlsRole
-impl core::marker::UnsafeUnpin for rsiprtp::srtp::dtls::DtlsRole
-impl core::panic::unwind_safe::RefUnwindSafe for rsiprtp::srtp::dtls::DtlsRole
-impl core::panic::unwind_safe::UnwindSafe for rsiprtp::srtp::dtls::DtlsRole
-impl<T, U> core::convert::Into<U> for rsiprtp::srtp::dtls::DtlsRole where U: core::convert::From<T>
-pub fn rsiprtp::srtp::dtls::DtlsRole::into(self) -> U
-impl<T, U> core::convert::TryFrom<U> for rsiprtp::srtp::dtls::DtlsRole where U: core::convert::Into<T>
-pub type rsiprtp::srtp::dtls::DtlsRole::Error = core::convert::Infallible
-pub fn rsiprtp::srtp::dtls::DtlsRole::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
-impl<T, U> core::convert::TryInto<U> for rsiprtp::srtp::dtls::DtlsRole where U: core::convert::TryFrom<T>
-pub type rsiprtp::srtp::dtls::DtlsRole::Error = <U as core::convert::TryFrom<T>>::Error
-pub fn rsiprtp::srtp::dtls::DtlsRole::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
-impl<T> alloc::borrow::ToOwned for rsiprtp::srtp::dtls::DtlsRole where T: core::clone::Clone
-pub type rsiprtp::srtp::dtls::DtlsRole::Owned = T
-pub fn rsiprtp::srtp::dtls::DtlsRole::clone_into(&self, target: &mut T)
-pub fn rsiprtp::srtp::dtls::DtlsRole::to_owned(&self) -> T
-impl<T> core::any::Any for rsiprtp::srtp::dtls::DtlsRole where T: 'static + ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsRole::type_id(&self) -> core::any::TypeId
-impl<T> core::borrow::Borrow<T> for rsiprtp::srtp::dtls::DtlsRole where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsRole::borrow(&self) -> &T
-impl<T> core::borrow::BorrowMut<T> for rsiprtp::srtp::dtls::DtlsRole where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsRole::borrow_mut(&mut self) -> &mut T
-impl<T> core::clone::CloneToUninit for rsiprtp::srtp::dtls::DtlsRole where T: core::clone::Clone
-pub unsafe fn rsiprtp::srtp::dtls::DtlsRole::clone_to_uninit(&self, dest: *mut u8)
-impl<T> core::convert::From<T> for rsiprtp::srtp::dtls::DtlsRole
-pub fn rsiprtp::srtp::dtls::DtlsRole::from(t: T) -> T
-impl<T> downcast_rs::Downcast for rsiprtp::srtp::dtls::DtlsRole where T: core::any::Any
-pub fn rsiprtp::srtp::dtls::DtlsRole::as_any(&self) -> &(dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::DtlsRole::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::DtlsRole::into_any(self: alloc::boxed::Box<T>) -> alloc::boxed::Box<dyn core::any::Any>
-pub fn rsiprtp::srtp::dtls::DtlsRole::into_any_rc(self: alloc::rc::Rc<T>) -> alloc::rc::Rc<dyn core::any::Any>
-impl<T> downcast_rs::DowncastSync for rsiprtp::srtp::dtls::DtlsRole where T: core::any::Any + core::marker::Send + core::marker::Sync
-pub fn rsiprtp::srtp::dtls::DtlsRole::into_any_arc(self: alloc::sync::Arc<T>) -> alloc::sync::Arc<(dyn core::any::Any + core::marker::Send + core::marker::Sync)>
-impl<T> tracing::instrument::Instrument for rsiprtp::srtp::dtls::DtlsRole
-impl<T> tracing::instrument::WithSubscriber for rsiprtp::srtp::dtls::DtlsRole
-impl<T> typenum::type_operators::Same for rsiprtp::srtp::dtls::DtlsRole
-pub type rsiprtp::srtp::dtls::DtlsRole::Output = T
-impl<V, T> ppv_lite86::types::VZip<V> for rsiprtp::srtp::dtls::DtlsRole where V: ppv_lite86::types::MultiLane<T>
-pub fn rsiprtp::srtp::dtls::DtlsRole::vzip(self) -> V
-pub enum rsiprtp::srtp::DtlsState
-pub rsiprtp::srtp::DtlsState::Closed
-pub rsiprtp::srtp::DtlsState::Connected
-pub rsiprtp::srtp::DtlsState::Connecting
-pub rsiprtp::srtp::DtlsState::Failed
-pub rsiprtp::srtp::DtlsState::New
-impl core::clone::Clone for rsiprtp::srtp::dtls::DtlsState
-pub fn rsiprtp::srtp::dtls::DtlsState::clone(&self) -> rsiprtp::srtp::dtls::DtlsState
-impl core::cmp::Eq for rsiprtp::srtp::dtls::DtlsState
-impl core::cmp::PartialEq for rsiprtp::srtp::dtls::DtlsState
-pub fn rsiprtp::srtp::dtls::DtlsState::eq(&self, other: &rsiprtp::srtp::dtls::DtlsState) -> bool
-impl core::fmt::Debug for rsiprtp::srtp::dtls::DtlsState
-pub fn rsiprtp::srtp::dtls::DtlsState::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for rsiprtp::srtp::dtls::DtlsState
-impl core::marker::StructuralPartialEq for rsiprtp::srtp::dtls::DtlsState
-impl core::marker::Freeze for rsiprtp::srtp::dtls::DtlsState
-impl core::marker::Send for rsiprtp::srtp::dtls::DtlsState
-impl core::marker::Sync for rsiprtp::srtp::dtls::DtlsState
-impl core::marker::Unpin for rsiprtp::srtp::dtls::DtlsState
-impl core::marker::UnsafeUnpin for rsiprtp::srtp::dtls::DtlsState
-impl core::panic::unwind_safe::RefUnwindSafe for rsiprtp::srtp::dtls::DtlsState
-impl core::panic::unwind_safe::UnwindSafe for rsiprtp::srtp::dtls::DtlsState
-impl<T, U> core::convert::Into<U> for rsiprtp::srtp::dtls::DtlsState where U: core::convert::From<T>
-pub fn rsiprtp::srtp::dtls::DtlsState::into(self) -> U
-impl<T, U> core::convert::TryFrom<U> for rsiprtp::srtp::dtls::DtlsState where U: core::convert::Into<T>
-pub type rsiprtp::srtp::dtls::DtlsState::Error = core::convert::Infallible
-pub fn rsiprtp::srtp::dtls::DtlsState::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
-impl<T, U> core::convert::TryInto<U> for rsiprtp::srtp::dtls::DtlsState where U: core::convert::TryFrom<T>
-pub type rsiprtp::srtp::dtls::DtlsState::Error = <U as core::convert::TryFrom<T>>::Error
-pub fn rsiprtp::srtp::dtls::DtlsState::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
-impl<T> alloc::borrow::ToOwned for rsiprtp::srtp::dtls::DtlsState where T: core::clone::Clone
-pub type rsiprtp::srtp::dtls::DtlsState::Owned = T
-pub fn rsiprtp::srtp::dtls::DtlsState::clone_into(&self, target: &mut T)
-pub fn rsiprtp::srtp::dtls::DtlsState::to_owned(&self) -> T
-impl<T> core::any::Any for rsiprtp::srtp::dtls::DtlsState where T: 'static + ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsState::type_id(&self) -> core::any::TypeId
-impl<T> core::borrow::Borrow<T> for rsiprtp::srtp::dtls::DtlsState where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsState::borrow(&self) -> &T
-impl<T> core::borrow::BorrowMut<T> for rsiprtp::srtp::dtls::DtlsState where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsState::borrow_mut(&mut self) -> &mut T
-impl<T> core::clone::CloneToUninit for rsiprtp::srtp::dtls::DtlsState where T: core::clone::Clone
-pub unsafe fn rsiprtp::srtp::dtls::DtlsState::clone_to_uninit(&self, dest: *mut u8)
-impl<T> core::convert::From<T> for rsiprtp::srtp::dtls::DtlsState
-pub fn rsiprtp::srtp::dtls::DtlsState::from(t: T) -> T
-impl<T> downcast_rs::Downcast for rsiprtp::srtp::dtls::DtlsState where T: core::any::Any
-pub fn rsiprtp::srtp::dtls::DtlsState::as_any(&self) -> &(dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::DtlsState::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::DtlsState::into_any(self: alloc::boxed::Box<T>) -> alloc::boxed::Box<dyn core::any::Any>
-pub fn rsiprtp::srtp::dtls::DtlsState::into_any_rc(self: alloc::rc::Rc<T>) -> alloc::rc::Rc<dyn core::any::Any>
-impl<T> downcast_rs::DowncastSync for rsiprtp::srtp::dtls::DtlsState where T: core::any::Any + core::marker::Send + core::marker::Sync
-pub fn rsiprtp::srtp::dtls::DtlsState::into_any_arc(self: alloc::sync::Arc<T>) -> alloc::sync::Arc<(dyn core::any::Any + core::marker::Send + core::marker::Sync)>
-impl<T> tracing::instrument::Instrument for rsiprtp::srtp::dtls::DtlsState
-impl<T> tracing::instrument::WithSubscriber for rsiprtp::srtp::dtls::DtlsState
-impl<T> typenum::type_operators::Same for rsiprtp::srtp::dtls::DtlsState
-pub type rsiprtp::srtp::dtls::DtlsState::Output = T
-impl<V, T> ppv_lite86::types::VZip<V> for rsiprtp::srtp::dtls::DtlsState where V: ppv_lite86::types::MultiLane<T>
-pub fn rsiprtp::srtp::dtls::DtlsState::vzip(self) -> V
-pub enum rsiprtp::srtp::FingerprintHash
-pub rsiprtp::srtp::FingerprintHash::Sha1
-pub rsiprtp::srtp::FingerprintHash::Sha256
-impl rsiprtp::srtp::dtls::FingerprintHash
-pub fn rsiprtp::srtp::dtls::FingerprintHash::from_sdp(s: &str) -> core::option::Option<Self>
-pub fn rsiprtp::srtp::dtls::FingerprintHash::to_sdp(&self) -> &'static str
-impl core::clone::Clone for rsiprtp::srtp::dtls::FingerprintHash
-pub fn rsiprtp::srtp::dtls::FingerprintHash::clone(&self) -> rsiprtp::srtp::dtls::FingerprintHash
-impl core::cmp::Eq for rsiprtp::srtp::dtls::FingerprintHash
-impl core::cmp::PartialEq for rsiprtp::srtp::dtls::FingerprintHash
-pub fn rsiprtp::srtp::dtls::FingerprintHash::eq(&self, other: &rsiprtp::srtp::dtls::FingerprintHash) -> bool
-impl core::fmt::Debug for rsiprtp::srtp::dtls::FingerprintHash
-pub fn rsiprtp::srtp::dtls::FingerprintHash::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for rsiprtp::srtp::dtls::FingerprintHash
-impl core::marker::StructuralPartialEq for rsiprtp::srtp::dtls::FingerprintHash
-impl core::marker::Freeze for rsiprtp::srtp::dtls::FingerprintHash
-impl core::marker::Send for rsiprtp::srtp::dtls::FingerprintHash
-impl core::marker::Sync for rsiprtp::srtp::dtls::FingerprintHash
-impl core::marker::Unpin for rsiprtp::srtp::dtls::FingerprintHash
-impl core::marker::UnsafeUnpin for rsiprtp::srtp::dtls::FingerprintHash
-impl core::panic::unwind_safe::RefUnwindSafe for rsiprtp::srtp::dtls::FingerprintHash
-impl core::panic::unwind_safe::UnwindSafe for rsiprtp::srtp::dtls::FingerprintHash
-impl<T, U> core::convert::Into<U> for rsiprtp::srtp::dtls::FingerprintHash where U: core::convert::From<T>
-pub fn rsiprtp::srtp::dtls::FingerprintHash::into(self) -> U
-impl<T, U> core::convert::TryFrom<U> for rsiprtp::srtp::dtls::FingerprintHash where U: core::convert::Into<T>
-pub type rsiprtp::srtp::dtls::FingerprintHash::Error = core::convert::Infallible
-pub fn rsiprtp::srtp::dtls::FingerprintHash::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
-impl<T, U> core::convert::TryInto<U> for rsiprtp::srtp::dtls::FingerprintHash where U: core::convert::TryFrom<T>
-pub type rsiprtp::srtp::dtls::FingerprintHash::Error = <U as core::convert::TryFrom<T>>::Error
-pub fn rsiprtp::srtp::dtls::FingerprintHash::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
-impl<T> alloc::borrow::ToOwned for rsiprtp::srtp::dtls::FingerprintHash where T: core::clone::Clone
-pub type rsiprtp::srtp::dtls::FingerprintHash::Owned = T
-pub fn rsiprtp::srtp::dtls::FingerprintHash::clone_into(&self, target: &mut T)
-pub fn rsiprtp::srtp::dtls::FingerprintHash::to_owned(&self) -> T
-impl<T> core::any::Any for rsiprtp::srtp::dtls::FingerprintHash where T: 'static + ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::FingerprintHash::type_id(&self) -> core::any::TypeId
-impl<T> core::borrow::Borrow<T> for rsiprtp::srtp::dtls::FingerprintHash where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::FingerprintHash::borrow(&self) -> &T
-impl<T> core::borrow::BorrowMut<T> for rsiprtp::srtp::dtls::FingerprintHash where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::FingerprintHash::borrow_mut(&mut self) -> &mut T
-impl<T> core::clone::CloneToUninit for rsiprtp::srtp::dtls::FingerprintHash where T: core::clone::Clone
-pub unsafe fn rsiprtp::srtp::dtls::FingerprintHash::clone_to_uninit(&self, dest: *mut u8)
-impl<T> core::convert::From<T> for rsiprtp::srtp::dtls::FingerprintHash
-pub fn rsiprtp::srtp::dtls::FingerprintHash::from(t: T) -> T
-impl<T> downcast_rs::Downcast for rsiprtp::srtp::dtls::FingerprintHash where T: core::any::Any
-pub fn rsiprtp::srtp::dtls::FingerprintHash::as_any(&self) -> &(dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::FingerprintHash::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::FingerprintHash::into_any(self: alloc::boxed::Box<T>) -> alloc::boxed::Box<dyn core::any::Any>
-pub fn rsiprtp::srtp::dtls::FingerprintHash::into_any_rc(self: alloc::rc::Rc<T>) -> alloc::rc::Rc<dyn core::any::Any>
-impl<T> downcast_rs::DowncastSync for rsiprtp::srtp::dtls::FingerprintHash where T: core::any::Any + core::marker::Send + core::marker::Sync
-pub fn rsiprtp::srtp::dtls::FingerprintHash::into_any_arc(self: alloc::sync::Arc<T>) -> alloc::sync::Arc<(dyn core::any::Any + core::marker::Send + core::marker::Sync)>
-impl<T> tracing::instrument::Instrument for rsiprtp::srtp::dtls::FingerprintHash
-impl<T> tracing::instrument::WithSubscriber for rsiprtp::srtp::dtls::FingerprintHash
-impl<T> typenum::type_operators::Same for rsiprtp::srtp::dtls::FingerprintHash
-pub type rsiprtp::srtp::dtls::FingerprintHash::Output = T
-impl<V, T> ppv_lite86::types::VZip<V> for rsiprtp::srtp::dtls::FingerprintHash where V: ppv_lite86::types::MultiLane<T>
-pub fn rsiprtp::srtp::dtls::FingerprintHash::vzip(self) -> V
-pub enum rsiprtp::srtp::SrtpProfile
-pub rsiprtp::srtp::SrtpProfile::Aes128CmHmacSha1_32
-pub rsiprtp::srtp::SrtpProfile::Aes128CmHmacSha1_80
-pub rsiprtp::srtp::SrtpProfile::Aes256CmHmacSha1_32
-pub rsiprtp::srtp::SrtpProfile::Aes256CmHmacSha1_80
-impl rsiprtp::srtp::dtls::SrtpProfile
-pub fn rsiprtp::srtp::dtls::SrtpProfile::from_id(id: u16) -> core::option::Option<Self>
-pub fn rsiprtp::srtp::dtls::SrtpProfile::id(&self) -> u16
-pub fn rsiprtp::srtp::dtls::SrtpProfile::key_length(&self) -> usize
-pub fn rsiprtp::srtp::dtls::SrtpProfile::keying_material_length(&self) -> usize
-pub fn rsiprtp::srtp::dtls::SrtpProfile::salt_length(&self) -> usize
-impl core::clone::Clone for rsiprtp::srtp::dtls::SrtpProfile
-pub fn rsiprtp::srtp::dtls::SrtpProfile::clone(&self) -> rsiprtp::srtp::dtls::SrtpProfile
-impl core::cmp::Eq for rsiprtp::srtp::dtls::SrtpProfile
-impl core::cmp::PartialEq for rsiprtp::srtp::dtls::SrtpProfile
-pub fn rsiprtp::srtp::dtls::SrtpProfile::eq(&self, other: &rsiprtp::srtp::dtls::SrtpProfile) -> bool
-impl core::fmt::Debug for rsiprtp::srtp::dtls::SrtpProfile
-pub fn rsiprtp::srtp::dtls::SrtpProfile::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for rsiprtp::srtp::dtls::SrtpProfile
-impl core::marker::StructuralPartialEq for rsiprtp::srtp::dtls::SrtpProfile
-impl core::marker::Freeze for rsiprtp::srtp::dtls::SrtpProfile
-impl core::marker::Send for rsiprtp::srtp::dtls::SrtpProfile
-impl core::marker::Sync for rsiprtp::srtp::dtls::SrtpProfile
-impl core::marker::Unpin for rsiprtp::srtp::dtls::SrtpProfile
-impl core::marker::UnsafeUnpin for rsiprtp::srtp::dtls::SrtpProfile
-impl core::panic::unwind_safe::RefUnwindSafe for rsiprtp::srtp::dtls::SrtpProfile
-impl core::panic::unwind_safe::UnwindSafe for rsiprtp::srtp::dtls::SrtpProfile
-impl<T, U> core::convert::Into<U> for rsiprtp::srtp::dtls::SrtpProfile where U: core::convert::From<T>
-pub fn rsiprtp::srtp::dtls::SrtpProfile::into(self) -> U
-impl<T, U> core::convert::TryFrom<U> for rsiprtp::srtp::dtls::SrtpProfile where U: core::convert::Into<T>
-pub type rsiprtp::srtp::dtls::SrtpProfile::Error = core::convert::Infallible
-pub fn rsiprtp::srtp::dtls::SrtpProfile::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
-impl<T, U> core::convert::TryInto<U> for rsiprtp::srtp::dtls::SrtpProfile where U: core::convert::TryFrom<T>
-pub type rsiprtp::srtp::dtls::SrtpProfile::Error = <U as core::convert::TryFrom<T>>::Error
-pub fn rsiprtp::srtp::dtls::SrtpProfile::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
-impl<T> alloc::borrow::ToOwned for rsiprtp::srtp::dtls::SrtpProfile where T: core::clone::Clone
-pub type rsiprtp::srtp::dtls::SrtpProfile::Owned = T
-pub fn rsiprtp::srtp::dtls::SrtpProfile::clone_into(&self, target: &mut T)
-pub fn rsiprtp::srtp::dtls::SrtpProfile::to_owned(&self) -> T
-impl<T> core::any::Any for rsiprtp::srtp::dtls::SrtpProfile where T: 'static + ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::SrtpProfile::type_id(&self) -> core::any::TypeId
-impl<T> core::borrow::Borrow<T> for rsiprtp::srtp::dtls::SrtpProfile where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::SrtpProfile::borrow(&self) -> &T
-impl<T> core::borrow::BorrowMut<T> for rsiprtp::srtp::dtls::SrtpProfile where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::SrtpProfile::borrow_mut(&mut self) -> &mut T
-impl<T> core::clone::CloneToUninit for rsiprtp::srtp::dtls::SrtpProfile where T: core::clone::Clone
-pub unsafe fn rsiprtp::srtp::dtls::SrtpProfile::clone_to_uninit(&self, dest: *mut u8)
-impl<T> core::convert::From<T> for rsiprtp::srtp::dtls::SrtpProfile
-pub fn rsiprtp::srtp::dtls::SrtpProfile::from(t: T) -> T
-impl<T> downcast_rs::Downcast for rsiprtp::srtp::dtls::SrtpProfile where T: core::any::Any
-pub fn rsiprtp::srtp::dtls::SrtpProfile::as_any(&self) -> &(dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::SrtpProfile::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::SrtpProfile::into_any(self: alloc::boxed::Box<T>) -> alloc::boxed::Box<dyn core::any::Any>
-pub fn rsiprtp::srtp::dtls::SrtpProfile::into_any_rc(self: alloc::rc::Rc<T>) -> alloc::rc::Rc<dyn core::any::Any>
-impl<T> downcast_rs::DowncastSync for rsiprtp::srtp::dtls::SrtpProfile where T: core::any::Any + core::marker::Send + core::marker::Sync
-pub fn rsiprtp::srtp::dtls::SrtpProfile::into_any_arc(self: alloc::sync::Arc<T>) -> alloc::sync::Arc<(dyn core::any::Any + core::marker::Send + core::marker::Sync)>
-impl<T> tracing::instrument::Instrument for rsiprtp::srtp::dtls::SrtpProfile
-impl<T> tracing::instrument::WithSubscriber for rsiprtp::srtp::dtls::SrtpProfile
-impl<T> typenum::type_operators::Same for rsiprtp::srtp::dtls::SrtpProfile
-pub type rsiprtp::srtp::dtls::SrtpProfile::Output = T
-impl<V, T> ppv_lite86::types::VZip<V> for rsiprtp::srtp::dtls::SrtpProfile where V: ppv_lite86::types::MultiLane<T>
-pub fn rsiprtp::srtp::dtls::SrtpProfile::vzip(self) -> V
-pub struct rsiprtp::srtp::DtlsConfig
-pub rsiprtp::srtp::DtlsConfig::fingerprint_hash: rsiprtp::srtp::dtls::FingerprintHash
-pub rsiprtp::srtp::DtlsConfig::role: rsiprtp::srtp::dtls::DtlsRole
-pub rsiprtp::srtp::DtlsConfig::srtp_profiles: alloc::vec::Vec<rsiprtp::srtp::dtls::SrtpProfile>
-impl core::clone::Clone for rsiprtp::srtp::dtls::DtlsConfig
-pub fn rsiprtp::srtp::dtls::DtlsConfig::clone(&self) -> rsiprtp::srtp::dtls::DtlsConfig
-impl core::default::Default for rsiprtp::srtp::dtls::DtlsConfig
-pub fn rsiprtp::srtp::dtls::DtlsConfig::default() -> Self
-impl core::fmt::Debug for rsiprtp::srtp::dtls::DtlsConfig
-pub fn rsiprtp::srtp::dtls::DtlsConfig::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Freeze for rsiprtp::srtp::dtls::DtlsConfig
-impl core::marker::Send for rsiprtp::srtp::dtls::DtlsConfig
-impl core::marker::Sync for rsiprtp::srtp::dtls::DtlsConfig
-impl core::marker::Unpin for rsiprtp::srtp::dtls::DtlsConfig
-impl core::marker::UnsafeUnpin for rsiprtp::srtp::dtls::DtlsConfig
-impl core::panic::unwind_safe::RefUnwindSafe for rsiprtp::srtp::dtls::DtlsConfig
-impl core::panic::unwind_safe::UnwindSafe for rsiprtp::srtp::dtls::DtlsConfig
-impl<T, U> core::convert::Into<U> for rsiprtp::srtp::dtls::DtlsConfig where U: core::convert::From<T>
-pub fn rsiprtp::srtp::dtls::DtlsConfig::into(self) -> U
-impl<T, U> core::convert::TryFrom<U> for rsiprtp::srtp::dtls::DtlsConfig where U: core::convert::Into<T>
-pub type rsiprtp::srtp::dtls::DtlsConfig::Error = core::convert::Infallible
-pub fn rsiprtp::srtp::dtls::DtlsConfig::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
-impl<T, U> core::convert::TryInto<U> for rsiprtp::srtp::dtls::DtlsConfig where U: core::convert::TryFrom<T>
-pub type rsiprtp::srtp::dtls::DtlsConfig::Error = <U as core::convert::TryFrom<T>>::Error
-pub fn rsiprtp::srtp::dtls::DtlsConfig::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
-impl<T> alloc::borrow::ToOwned for rsiprtp::srtp::dtls::DtlsConfig where T: core::clone::Clone
-pub type rsiprtp::srtp::dtls::DtlsConfig::Owned = T
-pub fn rsiprtp::srtp::dtls::DtlsConfig::clone_into(&self, target: &mut T)
-pub fn rsiprtp::srtp::dtls::DtlsConfig::to_owned(&self) -> T
-impl<T> core::any::Any for rsiprtp::srtp::dtls::DtlsConfig where T: 'static + ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsConfig::type_id(&self) -> core::any::TypeId
-impl<T> core::borrow::Borrow<T> for rsiprtp::srtp::dtls::DtlsConfig where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsConfig::borrow(&self) -> &T
-impl<T> core::borrow::BorrowMut<T> for rsiprtp::srtp::dtls::DtlsConfig where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsConfig::borrow_mut(&mut self) -> &mut T
-impl<T> core::clone::CloneToUninit for rsiprtp::srtp::dtls::DtlsConfig where T: core::clone::Clone
-pub unsafe fn rsiprtp::srtp::dtls::DtlsConfig::clone_to_uninit(&self, dest: *mut u8)
-impl<T> core::convert::From<T> for rsiprtp::srtp::dtls::DtlsConfig
-pub fn rsiprtp::srtp::dtls::DtlsConfig::from(t: T) -> T
-impl<T> downcast_rs::Downcast for rsiprtp::srtp::dtls::DtlsConfig where T: core::any::Any
-pub fn rsiprtp::srtp::dtls::DtlsConfig::as_any(&self) -> &(dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::DtlsConfig::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::DtlsConfig::into_any(self: alloc::boxed::Box<T>) -> alloc::boxed::Box<dyn core::any::Any>
-pub fn rsiprtp::srtp::dtls::DtlsConfig::into_any_rc(self: alloc::rc::Rc<T>) -> alloc::rc::Rc<dyn core::any::Any>
-impl<T> downcast_rs::DowncastSync for rsiprtp::srtp::dtls::DtlsConfig where T: core::any::Any + core::marker::Send + core::marker::Sync
-pub fn rsiprtp::srtp::dtls::DtlsConfig::into_any_arc(self: alloc::sync::Arc<T>) -> alloc::sync::Arc<(dyn core::any::Any + core::marker::Send + core::marker::Sync)>
-impl<T> tracing::instrument::Instrument for rsiprtp::srtp::dtls::DtlsConfig
-impl<T> tracing::instrument::WithSubscriber for rsiprtp::srtp::dtls::DtlsConfig
-impl<T> typenum::type_operators::Same for rsiprtp::srtp::dtls::DtlsConfig
-pub type rsiprtp::srtp::dtls::DtlsConfig::Output = T
-impl<V, T> ppv_lite86::types::VZip<V> for rsiprtp::srtp::dtls::DtlsConfig where V: ppv_lite86::types::MultiLane<T>
-pub fn rsiprtp::srtp::dtls::DtlsConfig::vzip(self) -> V
-pub struct rsiprtp::srtp::DtlsSrtpKeys
-pub rsiprtp::srtp::DtlsSrtpKeys::client_write_key: alloc::vec::Vec<u8>
-pub rsiprtp::srtp::DtlsSrtpKeys::client_write_salt: alloc::vec::Vec<u8>
-pub rsiprtp::srtp::DtlsSrtpKeys::profile: rsiprtp::srtp::dtls::SrtpProfile
-pub rsiprtp::srtp::DtlsSrtpKeys::server_write_key: alloc::vec::Vec<u8>
-pub rsiprtp::srtp::DtlsSrtpKeys::server_write_salt: alloc::vec::Vec<u8>
-impl rsiprtp::srtp::dtls::DtlsSrtpKeys
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::local_keys(&self, role: rsiprtp::srtp::dtls::DtlsRole) -> (&[u8], &[u8])
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::remote_keys(&self, role: rsiprtp::srtp::dtls::DtlsRole) -> (&[u8], &[u8])
-impl core::clone::Clone for rsiprtp::srtp::dtls::DtlsSrtpKeys
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::clone(&self) -> rsiprtp::srtp::dtls::DtlsSrtpKeys
-impl core::fmt::Debug for rsiprtp::srtp::dtls::DtlsSrtpKeys
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Freeze for rsiprtp::srtp::dtls::DtlsSrtpKeys
-impl core::marker::Send for rsiprtp::srtp::dtls::DtlsSrtpKeys
-impl core::marker::Sync for rsiprtp::srtp::dtls::DtlsSrtpKeys
-impl core::marker::Unpin for rsiprtp::srtp::dtls::DtlsSrtpKeys
-impl core::marker::UnsafeUnpin for rsiprtp::srtp::dtls::DtlsSrtpKeys
-impl core::panic::unwind_safe::RefUnwindSafe for rsiprtp::srtp::dtls::DtlsSrtpKeys
-impl core::panic::unwind_safe::UnwindSafe for rsiprtp::srtp::dtls::DtlsSrtpKeys
-impl<T, U> core::convert::Into<U> for rsiprtp::srtp::dtls::DtlsSrtpKeys where U: core::convert::From<T>
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::into(self) -> U
-impl<T, U> core::convert::TryFrom<U> for rsiprtp::srtp::dtls::DtlsSrtpKeys where U: core::convert::Into<T>
-pub type rsiprtp::srtp::dtls::DtlsSrtpKeys::Error = core::convert::Infallible
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
-impl<T, U> core::convert::TryInto<U> for rsiprtp::srtp::dtls::DtlsSrtpKeys where U: core::convert::TryFrom<T>
-pub type rsiprtp::srtp::dtls::DtlsSrtpKeys::Error = <U as core::convert::TryFrom<T>>::Error
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
-impl<T> alloc::borrow::ToOwned for rsiprtp::srtp::dtls::DtlsSrtpKeys where T: core::clone::Clone
-pub type rsiprtp::srtp::dtls::DtlsSrtpKeys::Owned = T
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::clone_into(&self, target: &mut T)
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::to_owned(&self) -> T
-impl<T> core::any::Any for rsiprtp::srtp::dtls::DtlsSrtpKeys where T: 'static + ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::type_id(&self) -> core::any::TypeId
-impl<T> core::borrow::Borrow<T> for rsiprtp::srtp::dtls::DtlsSrtpKeys where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::borrow(&self) -> &T
-impl<T> core::borrow::BorrowMut<T> for rsiprtp::srtp::dtls::DtlsSrtpKeys where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::borrow_mut(&mut self) -> &mut T
-impl<T> core::clone::CloneToUninit for rsiprtp::srtp::dtls::DtlsSrtpKeys where T: core::clone::Clone
-pub unsafe fn rsiprtp::srtp::dtls::DtlsSrtpKeys::clone_to_uninit(&self, dest: *mut u8)
-impl<T> core::convert::From<T> for rsiprtp::srtp::dtls::DtlsSrtpKeys
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::from(t: T) -> T
-impl<T> downcast_rs::Downcast for rsiprtp::srtp::dtls::DtlsSrtpKeys where T: core::any::Any
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::as_any(&self) -> &(dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::into_any(self: alloc::boxed::Box<T>) -> alloc::boxed::Box<dyn core::any::Any>
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::into_any_rc(self: alloc::rc::Rc<T>) -> alloc::rc::Rc<dyn core::any::Any>
-impl<T> downcast_rs::DowncastSync for rsiprtp::srtp::dtls::DtlsSrtpKeys where T: core::any::Any + core::marker::Send + core::marker::Sync
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::into_any_arc(self: alloc::sync::Arc<T>) -> alloc::sync::Arc<(dyn core::any::Any + core::marker::Send + core::marker::Sync)>
-impl<T> tracing::instrument::Instrument for rsiprtp::srtp::dtls::DtlsSrtpKeys
-impl<T> tracing::instrument::WithSubscriber for rsiprtp::srtp::dtls::DtlsSrtpKeys
-impl<T> typenum::type_operators::Same for rsiprtp::srtp::dtls::DtlsSrtpKeys
-pub type rsiprtp::srtp::dtls::DtlsSrtpKeys::Output = T
-impl<V, T> ppv_lite86::types::VZip<V> for rsiprtp::srtp::dtls::DtlsSrtpKeys where V: ppv_lite86::types::MultiLane<T>
-pub fn rsiprtp::srtp::dtls::DtlsSrtpKeys::vzip(self) -> V
-pub struct rsiprtp::srtp::Fingerprint
-pub rsiprtp::srtp::Fingerprint::algorithm: rsiprtp::srtp::dtls::FingerprintHash
-pub rsiprtp::srtp::Fingerprint::value: alloc::vec::Vec<u8>
-impl rsiprtp::srtp::dtls::Fingerprint
-pub fn rsiprtp::srtp::dtls::Fingerprint::from_certificate_der(cert_der: &[u8], algorithm: rsiprtp::srtp::dtls::FingerprintHash) -> Self
-pub fn rsiprtp::srtp::dtls::Fingerprint::parse(s: &str) -> core::option::Option<Self>
-pub fn rsiprtp::srtp::dtls::Fingerprint::to_sdp(&self) -> alloc::string::String
-pub fn rsiprtp::srtp::dtls::Fingerprint::verify(&self, other: &rsiprtp::srtp::dtls::Fingerprint) -> bool
-impl core::clone::Clone for rsiprtp::srtp::dtls::Fingerprint
-pub fn rsiprtp::srtp::dtls::Fingerprint::clone(&self) -> rsiprtp::srtp::dtls::Fingerprint
-impl core::fmt::Debug for rsiprtp::srtp::dtls::Fingerprint
-pub fn rsiprtp::srtp::dtls::Fingerprint::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Freeze for rsiprtp::srtp::dtls::Fingerprint
-impl core::marker::Send for rsiprtp::srtp::dtls::Fingerprint
-impl core::marker::Sync for rsiprtp::srtp::dtls::Fingerprint
-impl core::marker::Unpin for rsiprtp::srtp::dtls::Fingerprint
-impl core::marker::UnsafeUnpin for rsiprtp::srtp::dtls::Fingerprint
-impl core::panic::unwind_safe::RefUnwindSafe for rsiprtp::srtp::dtls::Fingerprint
-impl core::panic::unwind_safe::UnwindSafe for rsiprtp::srtp::dtls::Fingerprint
-impl<T, U> core::convert::Into<U> for rsiprtp::srtp::dtls::Fingerprint where U: core::convert::From<T>
-pub fn rsiprtp::srtp::dtls::Fingerprint::into(self) -> U
-impl<T, U> core::convert::TryFrom<U> for rsiprtp::srtp::dtls::Fingerprint where U: core::convert::Into<T>
-pub type rsiprtp::srtp::dtls::Fingerprint::Error = core::convert::Infallible
-pub fn rsiprtp::srtp::dtls::Fingerprint::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
-impl<T, U> core::convert::TryInto<U> for rsiprtp::srtp::dtls::Fingerprint where U: core::convert::TryFrom<T>
-pub type rsiprtp::srtp::dtls::Fingerprint::Error = <U as core::convert::TryFrom<T>>::Error
-pub fn rsiprtp::srtp::dtls::Fingerprint::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
-impl<T> alloc::borrow::ToOwned for rsiprtp::srtp::dtls::Fingerprint where T: core::clone::Clone
-pub type rsiprtp::srtp::dtls::Fingerprint::Owned = T
-pub fn rsiprtp::srtp::dtls::Fingerprint::clone_into(&self, target: &mut T)
-pub fn rsiprtp::srtp::dtls::Fingerprint::to_owned(&self) -> T
-impl<T> core::any::Any for rsiprtp::srtp::dtls::Fingerprint where T: 'static + ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::Fingerprint::type_id(&self) -> core::any::TypeId
-impl<T> core::borrow::Borrow<T> for rsiprtp::srtp::dtls::Fingerprint where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::Fingerprint::borrow(&self) -> &T
-impl<T> core::borrow::BorrowMut<T> for rsiprtp::srtp::dtls::Fingerprint where T: ?core::marker::Sized
-pub fn rsiprtp::srtp::dtls::Fingerprint::borrow_mut(&mut self) -> &mut T
-impl<T> core::clone::CloneToUninit for rsiprtp::srtp::dtls::Fingerprint where T: core::clone::Clone
-pub unsafe fn rsiprtp::srtp::dtls::Fingerprint::clone_to_uninit(&self, dest: *mut u8)
-impl<T> core::convert::From<T> for rsiprtp::srtp::dtls::Fingerprint
-pub fn rsiprtp::srtp::dtls::Fingerprint::from(t: T) -> T
-impl<T> downcast_rs::Downcast for rsiprtp::srtp::dtls::Fingerprint where T: core::any::Any
-pub fn rsiprtp::srtp::dtls::Fingerprint::as_any(&self) -> &(dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::Fingerprint::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
-pub fn rsiprtp::srtp::dtls::Fingerprint::into_any(self: alloc::boxed::Box<T>) -> alloc::boxed::Box<dyn core::any::Any>
-pub fn rsiprtp::srtp::dtls::Fingerprint::into_any_rc(self: alloc::rc::Rc<T>) -> alloc::rc::Rc<dyn core::any::Any>
-impl<T> downcast_rs::DowncastSync for rsiprtp::srtp::dtls::Fingerprint where T: core::any::Any + core::marker::Send + core::marker::Sync
-pub fn rsiprtp::srtp::dtls::Fingerprint::into_any_arc(self: alloc::sync::Arc<T>) -> alloc::sync::Arc<(dyn core::any::Any + core::marker::Send + core::marker::Sync)>
-impl<T> tracing::instrument::Instrument for rsiprtp::srtp::dtls::Fingerprint
-impl<T> tracing::instrument::WithSubscriber for rsiprtp::srtp::dtls::Fingerprint
-impl<T> typenum::type_operators::Same for rsiprtp::srtp::dtls::Fingerprint
-pub type rsiprtp::srtp::dtls::Fingerprint::Output = T
-impl<V, T> ppv_lite86::types::VZip<V> for rsiprtp::srtp::dtls::Fingerprint where V: ppv_lite86::types::MultiLane<T>
-pub fn rsiprtp::srtp::dtls::Fingerprint::vzip(self) -> V
 pub struct rsiprtp::srtp::SdesAttribute
 pub rsiprtp::srtp::SdesAttribute::crypto_suite: rsiprtp::srtp::CryptoSuite
 pub rsiprtp::srtp::SdesAttribute::lifetime: core::option::Option<u64>
@@ -18348,6 +17610,60 @@ impl<T> typenum::type_operators::Same for rsiprtp::transport::IncomingMessage
 pub type rsiprtp::transport::IncomingMessage::Output = T
 impl<V, T> ppv_lite86::types::VZip<V> for rsiprtp::transport::IncomingMessage where V: ppv_lite86::types::MultiLane<T>
 pub fn rsiprtp::transport::IncomingMessage::vzip(self) -> V
+pub struct rsiprtp::transport::KeepAliveConfig
+pub rsiprtp::transport::KeepAliveConfig::ping_interval: core::time::Duration
+pub rsiprtp::transport::KeepAliveConfig::send_pings: bool
+impl rsiprtp::transport::KeepAliveConfig
+pub fn rsiprtp::transport::KeepAliveConfig::enabled() -> Self
+pub fn rsiprtp::transport::KeepAliveConfig::enabled_with_interval(interval: core::time::Duration) -> Self
+impl core::clone::Clone for rsiprtp::transport::KeepAliveConfig
+pub fn rsiprtp::transport::KeepAliveConfig::clone(&self) -> rsiprtp::transport::KeepAliveConfig
+impl core::default::Default for rsiprtp::transport::KeepAliveConfig
+pub fn rsiprtp::transport::KeepAliveConfig::default() -> Self
+impl core::fmt::Debug for rsiprtp::transport::KeepAliveConfig
+pub fn rsiprtp::transport::KeepAliveConfig::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for rsiprtp::transport::KeepAliveConfig
+impl core::marker::Send for rsiprtp::transport::KeepAliveConfig
+impl core::marker::Sync for rsiprtp::transport::KeepAliveConfig
+impl core::marker::Unpin for rsiprtp::transport::KeepAliveConfig
+impl core::marker::UnsafeUnpin for rsiprtp::transport::KeepAliveConfig
+impl core::panic::unwind_safe::RefUnwindSafe for rsiprtp::transport::KeepAliveConfig
+impl core::panic::unwind_safe::UnwindSafe for rsiprtp::transport::KeepAliveConfig
+impl<T, U> core::convert::Into<U> for rsiprtp::transport::KeepAliveConfig where U: core::convert::From<T>
+pub fn rsiprtp::transport::KeepAliveConfig::into(self) -> U
+impl<T, U> core::convert::TryFrom<U> for rsiprtp::transport::KeepAliveConfig where U: core::convert::Into<T>
+pub type rsiprtp::transport::KeepAliveConfig::Error = core::convert::Infallible
+pub fn rsiprtp::transport::KeepAliveConfig::try_from(value: U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+impl<T, U> core::convert::TryInto<U> for rsiprtp::transport::KeepAliveConfig where U: core::convert::TryFrom<T>
+pub type rsiprtp::transport::KeepAliveConfig::Error = <U as core::convert::TryFrom<T>>::Error
+pub fn rsiprtp::transport::KeepAliveConfig::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+impl<T> alloc::borrow::ToOwned for rsiprtp::transport::KeepAliveConfig where T: core::clone::Clone
+pub type rsiprtp::transport::KeepAliveConfig::Owned = T
+pub fn rsiprtp::transport::KeepAliveConfig::clone_into(&self, target: &mut T)
+pub fn rsiprtp::transport::KeepAliveConfig::to_owned(&self) -> T
+impl<T> core::any::Any for rsiprtp::transport::KeepAliveConfig where T: 'static + ?core::marker::Sized
+pub fn rsiprtp::transport::KeepAliveConfig::type_id(&self) -> core::any::TypeId
+impl<T> core::borrow::Borrow<T> for rsiprtp::transport::KeepAliveConfig where T: ?core::marker::Sized
+pub fn rsiprtp::transport::KeepAliveConfig::borrow(&self) -> &T
+impl<T> core::borrow::BorrowMut<T> for rsiprtp::transport::KeepAliveConfig where T: ?core::marker::Sized
+pub fn rsiprtp::transport::KeepAliveConfig::borrow_mut(&mut self) -> &mut T
+impl<T> core::clone::CloneToUninit for rsiprtp::transport::KeepAliveConfig where T: core::clone::Clone
+pub unsafe fn rsiprtp::transport::KeepAliveConfig::clone_to_uninit(&self, dest: *mut u8)
+impl<T> core::convert::From<T> for rsiprtp::transport::KeepAliveConfig
+pub fn rsiprtp::transport::KeepAliveConfig::from(t: T) -> T
+impl<T> downcast_rs::Downcast for rsiprtp::transport::KeepAliveConfig where T: core::any::Any
+pub fn rsiprtp::transport::KeepAliveConfig::as_any(&self) -> &(dyn core::any::Any + 'static)
+pub fn rsiprtp::transport::KeepAliveConfig::as_any_mut(&mut self) -> &mut (dyn core::any::Any + 'static)
+pub fn rsiprtp::transport::KeepAliveConfig::into_any(self: alloc::boxed::Box<T>) -> alloc::boxed::Box<dyn core::any::Any>
+pub fn rsiprtp::transport::KeepAliveConfig::into_any_rc(self: alloc::rc::Rc<T>) -> alloc::rc::Rc<dyn core::any::Any>
+impl<T> downcast_rs::DowncastSync for rsiprtp::transport::KeepAliveConfig where T: core::any::Any + core::marker::Send + core::marker::Sync
+pub fn rsiprtp::transport::KeepAliveConfig::into_any_arc(self: alloc::sync::Arc<T>) -> alloc::sync::Arc<(dyn core::any::Any + core::marker::Send + core::marker::Sync)>
+impl<T> tracing::instrument::Instrument for rsiprtp::transport::KeepAliveConfig
+impl<T> tracing::instrument::WithSubscriber for rsiprtp::transport::KeepAliveConfig
+impl<T> typenum::type_operators::Same for rsiprtp::transport::KeepAliveConfig
+pub type rsiprtp::transport::KeepAliveConfig::Output = T
+impl<V, T> ppv_lite86::types::VZip<V> for rsiprtp::transport::KeepAliveConfig where V: ppv_lite86::types::MultiLane<T>
+pub fn rsiprtp::transport::KeepAliveConfig::vzip(self) -> V
 pub struct rsiprtp::transport::OutgoingMessage
 pub rsiprtp::transport::OutgoingMessage::data: bytes::bytes::Bytes
 pub rsiprtp::transport::OutgoingMessage::destination: core::net::socket_addr::SocketAddr
@@ -18554,6 +17870,7 @@ pub async fn rsiprtp::transport::TcpTransport::send(&self, msg: rsiprtp::transpo
 pub async fn rsiprtp::transport::TcpTransport::send_to(&self, data: &[u8], dest: core::net::socket_addr::SocketAddr) -> rsiprtp::core::Result<()>
 pub fn rsiprtp::transport::TcpTransport::sender(&self) -> rsiprtp::transport::TcpSender
 pub fn rsiprtp::transport::TcpTransport::start(self) -> (tokio::sync::mpsc::bounded::Receiver<rsiprtp::transport::IncomingMessage>, rsiprtp::transport::TcpSender)
+pub fn rsiprtp::transport::TcpTransport::with_keepalive(self, keepalive: rsiprtp::transport::KeepAliveConfig) -> Self
 impl !core::marker::Freeze for rsiprtp::transport::TcpTransport
 impl core::marker::Send for rsiprtp::transport::TcpTransport
 impl core::marker::Sync for rsiprtp::transport::TcpTransport
@@ -18919,6 +18236,9 @@ impl<T> typenum::type_operators::Same for rsiprtp::transport::UdpTransport
 pub type rsiprtp::transport::UdpTransport::Output = T
 impl<V, T> ppv_lite86::types::VZip<V> for rsiprtp::transport::UdpTransport where V: ppv_lite86::types::MultiLane<T>
 pub fn rsiprtp::transport::UdpTransport::vzip(self) -> V
+pub const rsiprtp::transport::DEFAULT_PING_INTERVAL: core::time::Duration
+pub const rsiprtp::transport::KEEPALIVE_PING: &[u8]
+pub const rsiprtp::transport::KEEPALIVE_PONG: &[u8]
 pub const rsiprtp::transport::MAX_TCP_SIZE: usize
 pub const rsiprtp::transport::MAX_TLS_SIZE: usize
 pub const rsiprtp::transport::MAX_UDP_SIZE: usize

@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+## [0.3.0] — 2026-05-02
+
+### Removed
+
+- **DTLS-SRTP stub** (`rsiprtp::srtp::dtls`). The module never contained a DTLS handshake — only fingerprint parsing, role enums, and a use-srtp-extension codec. SRTP key exchange is via SDES only. If DTLS-SRTP support arrives later it will be designed against an actual DTLS crate, not retrofitted onto these types.
+
 ## [0.2.0] — 2026-05-01
 
 ### Added
@@ -61,5 +67,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   macOS is too coarse to distinguish back-to-back calls; it now draws from
   `rand::thread_rng()`.
 
-[Unreleased]: https://github.com/0x4D44/rsiprtp/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/0x4D44/rsiprtp/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/0x4D44/rsiprtp/releases/tag/v0.3.0
 [0.2.0]: https://github.com/0x4D44/rsiprtp/releases/tag/v0.2.0
