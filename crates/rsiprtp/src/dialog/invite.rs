@@ -297,19 +297,151 @@ impl InviteDialog {
         Some(bye)
     }
 
-    /// Build an in-dialog request.
+    /// Build a PRACK request for an inbound reliable provisional response
+    /// (RFC 3262 §7.2).
+    ///
+    /// PRACK is a new transaction inside the dialog and gets the next CSeq
+    /// value, *not* the original INVITE's CSeq. The INVITE's CSeq travels in
+    /// the `RAck` header alongside the response's `RSeq`.
+    ///
+    /// # Panics (debug builds)
+    ///
+    /// `to.rseq()` must be `Some` — the caller is expected to have already
+    /// determined that the response carries a reliable provisional. In
+    /// release builds an absent RSeq falls back to 0 to avoid a hard failure.
+    pub fn build_prack(&mut self, to: &SipResponse) -> SipRequest {
+        let rseq = to
+            .rseq()
+            .map(|r| r.0)
+            .or_else(|| {
+                debug_assert!(
+                    false,
+                    "build_prack called with response lacking RSeq header — caller bug"
+                );
+                None
+            })
+            .unwrap_or(0);
+        let cseq_orig = to.cseq().unwrap_or(0);
+        let cseq_method = to
+            .cseq_method()
+            .expect("build_prack: 1xx response must carry a parseable CSeq method (validated by transaction layer)");
+
+        let cseq = self.info.next_local_seq();
+        let branch = format!("z9hG4bK{}", uuid::Uuid::new_v4().simple());
+        let request_uri = self.info.remote_target.clone();
+        let routes = self.info.route_set.routes();
+
+        SipRequest::builder()
+            .method(Method::Prack)
+            .uri(&request_uri)
+            .via("0.0.0.0", 5060, "UDP", &branch)
+            .from(&self.info.local_uri, &self.info.id.local_tag)
+            .to(&self.info.remote_uri)
+            .to_tag(&self.info.id.remote_tag)
+            .call_id(&self.info.id.call_id)
+            .cseq(cseq)
+            .max_forwards(70)
+            .rack(rseq, cseq_orig, cseq_method)
+            .route(routes)
+            .build()
+            .expect("build_prack: dialog state already validated by caller")
+    }
+
+    /// Build an in-dialog UPDATE request (RFC 3311).
+    ///
+    /// UPDATE is used here for session-timer refresh (RFC 4028); the body is
+    /// always empty. When `session_expires` is `Some`, the request advertises
+    /// us as the refresher (`refresher=uac`) and adds `Supported: timer`.
+    ///
+    /// CSeq is incremented as for any in-dialog UAC request. Route headers
+    /// from the dialog's route set are emitted per RFC 3261 §12.2.1.1
+    /// (loose-route case only; see `build_in_dialog_request`).
+    pub fn build_update(&mut self, session_expires: Option<u32>) -> SipRequest {
+        let cseq = self.info.next_local_seq();
+        let branch = format!("z9hG4bK{}", uuid::Uuid::new_v4().simple());
+        let request_uri = self.info.remote_target.clone();
+        let routes = self.info.route_set.routes();
+
+        let mut builder = SipRequest::builder()
+            .method(Method::Update)
+            .uri(&request_uri)
+            .via("0.0.0.0", 5060, "UDP", &branch)
+            .from(&self.info.local_uri, &self.info.id.local_tag)
+            .to(&self.info.remote_uri)
+            .to_tag(&self.info.id.remote_tag)
+            .call_id(&self.info.id.call_id)
+            .cseq(cseq)
+            .max_forwards(70)
+            .allow(&[
+                Method::Invite,
+                Method::Ack,
+                Method::Bye,
+                Method::Cancel,
+                Method::Options,
+                Method::Prack,
+                Method::Update,
+            ])
+            .route(routes);
+
+        if let Some(secs) = session_expires {
+            builder = builder
+                .session_expires(secs, Some(crate::sip::headers::Refresher::Uac))
+                .supported(&["timer"]);
+        }
+
+        builder
+            .build()
+            .expect("build_update: dialog state already validated by caller")
+    }
+
+    /// Build a 200 OK response to an inbound in-dialog UPDATE
+    /// (RFC 3311 / RFC 4028).
+    ///
+    /// Echoes the request's `Session-Expires` (with refresher unchanged) when
+    /// present, and always advertises our `Allow` set so the peer's future
+    /// refreshes can prefer UPDATE over re-INVITE. No body. No state mutation
+    /// — deadline updates are handled by the call layer (Phase 4).
+    pub fn handle_update(&self, req: &SipRequest) -> SipResponse {
+        let mut builder = SipResponse::builder()
+            .status(200, "OK")
+            .from_request(req)
+            .allow(&[
+                Method::Invite,
+                Method::Ack,
+                Method::Bye,
+                Method::Cancel,
+                Method::Options,
+                Method::Prack,
+                Method::Update,
+            ]);
+
+        if let Some(se) = req.session_expires() {
+            builder = builder.session_expires(se.delta_seconds, se.refresher);
+        }
+
+        builder
+            .build()
+            .expect("handle_update: response builder should not fail for a copied request")
+    }
+
+    /// Build an in-dialog request (RFC 3261 §12.2.1.1).
+    ///
+    /// Loose-route case (modern carriers, `;lr` always present): the request
+    /// URI is the dialog's remote target and the route set is emitted as
+    /// `Route` headers in order. Strict routing is not implemented: if a
+    /// peer ever advertises a route set without `;lr` we silently emit a
+    /// loose-route-shaped request anyway, which violates RFC 3261
+    /// §12.2.1.1 against a strict-route peer. The proxy's response is
+    /// the only failure signal — there is no local detection or test
+    /// for this. Nobody ships strict routing today, so this is
+    /// acceptable; revisit if a strict-route peer appears.
     fn build_in_dialog_request(&self, method: Method, cseq: u32) -> Option<SipRequest> {
         let branch = format!("z9hG4bK{}", uuid::Uuid::new_v4().simple());
 
-        // Determine request URI based on route set
-        let request_uri = if self.info.route_set.is_empty() {
-            self.info.remote_target.clone()
-        } else {
-            // If route set has lr parameter, use remote target
-            // Otherwise, use first route
-            // For simplicity, assume lr parameter is present
-            self.info.remote_target.clone()
-        };
+        // Loose-route: request URI stays as remote target; routes go into
+        // Route headers. Empty route set → no Route headers, URI is target.
+        let request_uri = self.info.remote_target.clone();
+        let routes = self.info.route_set.routes();
 
         // Build request - swap From/To based on role
         let (from_uri, from_tag, to_uri, to_tag) = match self.role {
@@ -336,6 +468,7 @@ impl InviteDialog {
             .to_tag(to_tag)
             .call_id(&self.info.id.call_id)
             .cseq(cseq)
+            .route(routes)
             .build()
             .ok()?;
 
@@ -912,13 +1045,39 @@ Content-Length: 0\r\n\
         dialog.poll_actions();
 
         dialog.info.route_set = crate::dialog::state::RouteSet::from_record_route_values(
-            &["<sip:proxy.example.com;lr>".to_string()],
+            &[
+                "<sip:proxy1.example.com;lr>".to_string(),
+                "<sip:proxy2.example.com;lr>".to_string(),
+            ],
             false,
         );
 
-        let bye = dialog.send_bye();
-        assert!(bye.is_some());
+        let bye = dialog.send_bye().expect("BYE must build");
         assert_eq!(dialog.state(), DialogState::Terminating);
+
+        // Round-trip through the wire so we read back exactly what we'll
+        // emit — guards against the route headers being dropped at
+        // serialization time.
+        let bytes = bye.to_bytes();
+        let parsed = crate::sip::SipMessage::parse(&bytes).unwrap();
+        let parsed_req = parsed.as_request().unwrap();
+
+        let routes = parsed_req.route_headers();
+        assert_eq!(
+            routes.len(),
+            2,
+            "BYE must carry both Route headers from the dialog's route set"
+        );
+        assert!(
+            routes[0].contains("proxy1"),
+            "first Route header should be proxy1, got {:?}",
+            routes
+        );
+        assert!(
+            routes[1].contains("proxy2"),
+            "second Route header should be proxy2, got {:?}",
+            routes
+        );
     }
 
     // Additional tests for better coverage
@@ -1438,5 +1597,355 @@ Content-Length: 0\r\n\
 
             assert_eq!(dialog.state(), DialogState::Confirmed);
         }
+    }
+
+    // ----- Phase 3: PRACK / UPDATE / handle_update --------------------------
+
+    /// Build a confirmed UAC dialog ready for in-dialog requests.
+    fn confirmed_uac_dialog() -> InviteDialog {
+        let invite = create_invite();
+        let mut dialog = InviteDialog::new_uac(invite.clone());
+        let response = create_response(&invite, 200);
+        dialog.handle_response(response);
+        dialog.poll_actions();
+        dialog
+    }
+
+    /// Build a 180 Ringing response carrying RSeq + a fresh CSeq value the
+    /// caller can pin.
+    fn provisional_with_rseq(invite: &SipRequest, code: u16, rseq: u32) -> SipResponse {
+        SipResponse::builder()
+            .status(code, "Ringing")
+            .from_request(invite)
+            .to_tag("totag")
+            .contact("sip:bob@192.168.1.2:5060")
+            .rseq(rseq)
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn test_build_prack_carries_rack() {
+        // INVITE has CSeq 5 / Method INVITE, response carries RSeq 1.
+        let invite = SipRequest::builder()
+            .method(Method::Invite)
+            .uri("sip:bob@example.com")
+            .via("192.168.1.1", 5060, "UDP", "z9hG4bKtest")
+            .from("sip:alice@example.com", "fromtag")
+            .to("sip:bob@example.com")
+            .call_id("test@example.com")
+            .cseq(5)
+            .contact("sip:alice@192.168.1.1:5060")
+            .build()
+            .unwrap();
+
+        let mut dialog = InviteDialog::new_uac(invite.clone());
+        let response = provisional_with_rseq(&invite, 180, 1);
+        dialog.handle_response(response.clone());
+        dialog.poll_actions();
+
+        let prack = dialog.build_prack(&response);
+
+        // Round-trip through the wire to make sure RAck survives serialization.
+        let bytes = prack.to_bytes();
+        let parsed = crate::sip::SipMessage::parse(&bytes).unwrap();
+        let parsed_req = parsed.as_request().unwrap();
+
+        let rack = parsed_req.rack().expect("PRACK must carry RAck");
+        assert_eq!(rack.rseq, 1);
+        assert_eq!(rack.cseq, 5);
+        assert_eq!(rack.method, Method::Invite);
+    }
+
+    #[test]
+    fn test_build_prack_uses_dialog_routing() {
+        let invite = create_invite();
+        let mut dialog = InviteDialog::new_uac(invite.clone());
+        let response = provisional_with_rseq(&invite, 180, 1);
+        dialog.handle_response(response.clone());
+        dialog.poll_actions();
+        let invite_cseq = dialog.info.local_seq;
+
+        let prack = dialog.build_prack(&response);
+
+        assert_eq!(prack.method(), Method::Prack);
+        // Dialog routing fields.
+        assert_eq!(prack.call_id().unwrap(), "test@example.com");
+        assert_eq!(prack.from_tag().unwrap(), "fromtag");
+        assert_eq!(prack.to_tag(), Some("totag".to_string()));
+
+        // PRACK gets its OWN CSeq, *not* the INVITE's. The dialog's local_seq
+        // started at the INVITE's value and must have advanced.
+        let cseq = prack.cseq().unwrap();
+        assert_eq!(cseq, invite_cseq + 1);
+        assert_eq!(prack.cseq_method().unwrap(), Method::Prack);
+
+        // Fresh branch — must differ from the INVITE's branch.
+        let branch = prack.via_branch().unwrap();
+        assert!(branch.starts_with("z9hG4bK"));
+        assert_ne!(branch, "z9hG4bKtest");
+    }
+
+    #[test]
+    #[should_panic(expected = "build_prack")]
+    fn test_build_prack_debug_asserts_on_no_rseq() {
+        let invite = create_invite();
+        let mut dialog = InviteDialog::new_uac(invite.clone());
+        // Response with NO RSeq header.
+        let response = create_response(&invite, 180);
+        dialog.handle_response(response.clone());
+        dialog.poll_actions();
+
+        // Should debug_assert! and panic in test builds.
+        let _ = dialog.build_prack(&response);
+    }
+
+    #[test]
+    fn test_build_update_session_expires_some() {
+        let mut dialog = confirmed_uac_dialog();
+        let update = dialog.build_update(Some(1800));
+
+        // Round-trip via the wire so we read back exactly what we'll emit.
+        let bytes = update.to_bytes();
+        let parsed = crate::sip::SipMessage::parse(&bytes).unwrap();
+        let parsed_req = parsed.as_request().unwrap();
+
+        assert_eq!(parsed_req.method(), Method::Update);
+
+        let se = parsed_req
+            .session_expires()
+            .expect("Session-Expires must be present when secs is Some");
+        assert_eq!(se.delta_seconds, 1800);
+        assert_eq!(
+            se.refresher,
+            Some(crate::sip::headers::Refresher::Uac),
+            "refresher should be UAC when we are sending UPDATE"
+        );
+
+        let supported = parsed_req
+            .supported()
+            .expect("Supported: timer must be present");
+        assert!(
+            supported.0.iter().any(|t| t == "timer"),
+            "Supported must include the 'timer' option-tag, got {:?}",
+            supported.0
+        );
+    }
+
+    #[test]
+    fn test_build_update_session_expires_none() {
+        let mut dialog = confirmed_uac_dialog();
+        let update = dialog.build_update(None);
+
+        let bytes = update.to_bytes();
+        let parsed = crate::sip::SipMessage::parse(&bytes).unwrap();
+        let parsed_req = parsed.as_request().unwrap();
+
+        assert_eq!(parsed_req.method(), Method::Update);
+        assert!(
+            parsed_req.session_expires().is_none(),
+            "no Session-Expires when caller passes None"
+        );
+        let has_timer_supported = parsed_req
+            .supported()
+            .map(|s| s.0.iter().any(|t| t == "timer"))
+            .unwrap_or(false);
+        assert!(
+            !has_timer_supported,
+            "no 'Supported: timer' when session_expires is None"
+        );
+    }
+
+    #[test]
+    fn test_build_update_increments_cseq() {
+        let mut dialog = confirmed_uac_dialog();
+        let update1 = dialog.build_update(Some(1800));
+        let update2 = dialog.build_update(Some(1800));
+
+        let cseq1 = update1.cseq().unwrap();
+        let cseq2 = update2.cseq().unwrap();
+        assert_eq!(
+            cseq2,
+            cseq1 + 1,
+            "consecutive UPDATEs must use consecutive CSeq values"
+        );
+        assert_eq!(update1.cseq_method().unwrap(), Method::Update);
+        assert_eq!(update2.cseq_method().unwrap(), Method::Update);
+    }
+
+    /// Build an inbound UPDATE request carrying optional Session-Expires.
+    fn inbound_update(session_expires: Option<(u32, crate::sip::headers::Refresher)>) -> SipRequest {
+        let mut builder = SipRequest::builder()
+            .method(Method::Update)
+            .uri("sip:alice@example.com")
+            .via("192.168.1.2", 5060, "UDP", "z9hG4bKupd")
+            .from("sip:bob@example.com", "totag")
+            .to("sip:alice@example.com")
+            .to_tag("fromtag")
+            .call_id("test@example.com")
+            .cseq(42);
+        if let Some((secs, refresher)) = session_expires {
+            builder = builder.session_expires(secs, Some(refresher));
+        }
+        builder.build().unwrap()
+    }
+
+    #[test]
+    fn test_handle_update_returns_200() {
+        let dialog = confirmed_uac_dialog();
+        let req = inbound_update(None);
+
+        let resp = dialog.handle_update(&req);
+        assert_eq!(resp.status_code(), 200);
+
+        // Echoed dialog identifiers come from the request.
+        assert_eq!(resp.call_id().unwrap(), req.call_id().unwrap());
+        assert_eq!(resp.from_tag().unwrap(), req.from_tag().unwrap());
+        assert_eq!(resp.to_tag(), req.to_tag());
+        assert_eq!(resp.cseq().unwrap(), req.cseq().unwrap());
+        assert_eq!(resp.cseq_method().unwrap(), Method::Update);
+    }
+
+    #[test]
+    fn test_handle_update_echoes_session_expires() {
+        let dialog = confirmed_uac_dialog();
+        let req = inbound_update(Some((1800, crate::sip::headers::Refresher::Uac)));
+
+        let resp = dialog.handle_update(&req);
+
+        // Round-trip through the wire to confirm Session-Expires survives.
+        let bytes = resp.to_bytes();
+        let parsed = crate::sip::SipMessage::parse(&bytes).unwrap();
+        let parsed_resp = parsed.as_response().unwrap();
+
+        let se = parsed_resp
+            .session_expires()
+            .expect("Session-Expires must be echoed when present in request");
+        assert_eq!(se.delta_seconds, 1800);
+        assert_eq!(se.refresher, Some(crate::sip::headers::Refresher::Uac));
+    }
+
+    #[test]
+    fn test_handle_update_no_session_expires_when_request_has_none() {
+        let dialog = confirmed_uac_dialog();
+        let req = inbound_update(None);
+
+        let resp = dialog.handle_update(&req);
+        let bytes = resp.to_bytes();
+        let parsed = crate::sip::SipMessage::parse(&bytes).unwrap();
+        let parsed_resp = parsed.as_response().unwrap();
+
+        assert!(
+            parsed_resp.session_expires().is_none(),
+            "no Session-Expires on response when request had none"
+        );
+    }
+
+    /// Outbound UPDATE must advertise the seven Allow methods from the HLD.
+    /// Round-trips through the wire so we know we read what we emit.
+    #[test]
+    fn test_build_update_emits_allow_header() {
+        let mut dialog = confirmed_uac_dialog();
+        let update = dialog.build_update(Some(1800));
+
+        let bytes = update.to_bytes();
+        let parsed = crate::sip::SipMessage::parse(&bytes).unwrap();
+        let parsed_req = parsed.as_request().unwrap();
+
+        let allow = parsed_req
+            .allow()
+            .expect("UPDATE must advertise Allow per HLD");
+        assert_eq!(
+            allow,
+            vec![
+                Method::Invite,
+                Method::Ack,
+                Method::Bye,
+                Method::Cancel,
+                Method::Options,
+                Method::Prack,
+                Method::Update,
+            ],
+            "Allow must list all seven methods in order"
+        );
+    }
+
+    /// 200 OK on inbound UPDATE must carry the same Allow set.
+    #[test]
+    fn test_handle_update_emits_allow_header() {
+        let dialog = confirmed_uac_dialog();
+        let req = inbound_update(None);
+        let resp = dialog.handle_update(&req);
+
+        let bytes = resp.to_bytes();
+        let parsed = crate::sip::SipMessage::parse(&bytes).unwrap();
+        let parsed_resp = parsed.as_response().unwrap();
+
+        let allow = parsed_resp
+            .allow()
+            .expect("200 OK to UPDATE must advertise Allow");
+        assert_eq!(
+            allow,
+            vec![
+                Method::Invite,
+                Method::Ack,
+                Method::Bye,
+                Method::Cancel,
+                Method::Options,
+                Method::Prack,
+                Method::Update,
+            ],
+        );
+    }
+
+    /// Outbound UPDATE must emit Route headers in dialog order (loose
+    /// routing, RFC 3261 §12.2.1.1).
+    #[test]
+    fn test_build_update_emits_route_headers() {
+        let mut dialog = confirmed_uac_dialog();
+        dialog.info.route_set = crate::dialog::state::RouteSet::from_record_route_values(
+            &[
+                "<sip:proxy1.example.com;lr>".to_string(),
+                "<sip:proxy2.example.com;lr>".to_string(),
+            ],
+            false,
+        );
+
+        let update = dialog.build_update(Some(1800));
+        let bytes = update.to_bytes();
+        let parsed = crate::sip::SipMessage::parse(&bytes).unwrap();
+        let parsed_req = parsed.as_request().unwrap();
+
+        let routes = parsed_req.route_headers();
+        assert_eq!(routes.len(), 2);
+        assert!(routes[0].contains("proxy1"));
+        assert!(routes[1].contains("proxy2"));
+    }
+
+    /// PRACK must also carry Route headers from the dialog's route set.
+    #[test]
+    fn test_build_prack_emits_route_headers() {
+        let invite = create_invite();
+        let mut dialog = InviteDialog::new_uac(invite.clone());
+        let response = provisional_with_rseq(&invite, 180, 1);
+        dialog.handle_response(response.clone());
+        dialog.poll_actions();
+        dialog.info.route_set = crate::dialog::state::RouteSet::from_record_route_values(
+            &[
+                "<sip:proxy1.example.com;lr>".to_string(),
+                "<sip:proxy2.example.com;lr>".to_string(),
+            ],
+            false,
+        );
+
+        let prack = dialog.build_prack(&response);
+        let bytes = prack.to_bytes();
+        let parsed = crate::sip::SipMessage::parse(&bytes).unwrap();
+        let parsed_req = parsed.as_request().unwrap();
+
+        let routes = parsed_req.route_headers();
+        assert_eq!(routes.len(), 2);
+        assert!(routes[0].contains("proxy1"));
+        assert!(routes[1].contains("proxy2"));
     }
 }

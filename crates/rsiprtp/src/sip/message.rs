@@ -60,6 +60,46 @@ fn find_require(headers: &rsip::Headers) -> Option<crate::sip::headers::Require>
     }
 }
 
+/// Find and parse `Allow` header(s) into a `Vec<Method>`.
+///
+/// Multiple `Allow` lines are equivalent to a single comma-separated value
+/// per RFC 3261 §7.3.1; method tokens from every matching line are
+/// concatenated in wire order. Unknown method tokens are skipped silently
+/// rather than failing the whole header — this is a read-side normalization
+/// only. Returns `None` when no `Allow` header is present at all (so the
+/// caller can distinguish "absent" from "present but empty/all-unknown").
+fn find_allow(headers: &rsip::Headers) -> Option<Vec<Method>> {
+    use std::str::FromStr;
+    let mut values: Vec<String> = Vec::new();
+    for header in headers.iter() {
+        match header {
+            rsip::Header::Allow(a) => values.push(a.value().to_string()),
+            rsip::Header::Other(key, value) if key.eq_ignore_ascii_case("Allow") => {
+                values.push(value.clone());
+            }
+            _ => {}
+        }
+    }
+    if values.is_empty() {
+        return None;
+    }
+    let mut methods: Vec<Method> = Vec::new();
+    for raw in values {
+        for tok in raw.split(',') {
+            let trimmed = tok.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            // rsip::Method::from_str is case-insensitive; map to ours.
+            if let Ok(m) = rsip::Method::from_str(&trimmed.to_ascii_uppercase()) {
+                methods.push(Method::from(&m));
+            }
+            // Unknown methods are skipped silently per the doc above.
+        }
+    }
+    Some(methods)
+}
+
 /// Find and parse `Supported` header(s).
 ///
 /// Per RFC 3261 §7.3.1, multiple `Supported` lines are equivalent to a
@@ -352,6 +392,25 @@ impl SipRequest {
             .and_then(|v| crate::sip::headers::RAck::parse(&v).ok())
     }
 
+    /// Get the `Allow` header (RFC 3261 §20.5) if present, parsed as a list
+    /// of methods. Unknown method tokens are skipped silently.
+    pub fn allow(&self) -> Option<Vec<Method>> {
+        find_allow(&self.inner.headers)
+    }
+
+    /// Get all `Route` header values (RFC 3261 §20.34) in wire order,
+    /// each as the raw header value (e.g. `<sip:proxy.example.com;lr>`).
+    /// Returns an empty Vec if no Route headers are present.
+    pub fn route_headers(&self) -> Vec<String> {
+        let mut routes = Vec::new();
+        for header in self.inner.headers.iter() {
+            if let rsip::Header::Route(r) = header {
+                routes.push(r.value().trim().to_string());
+            }
+        }
+        routes
+    }
+
     /// Convert to bytes.
     pub fn to_bytes(&self) -> Bytes {
         Bytes::from(self.inner.to_string())
@@ -582,6 +641,12 @@ impl SipResponse {
             .and_then(|v| crate::sip::headers::RSeq::parse(&v).ok())
     }
 
+    /// Get the `Allow` header (RFC 3261 §20.5) if present, parsed as a list
+    /// of methods. Unknown method tokens are skipped silently.
+    pub fn allow(&self) -> Option<Vec<Method>> {
+        find_allow(&self.inner.headers)
+    }
+
     /// Convert to bytes.
     pub fn to_bytes(&self) -> Bytes {
         Bytes::from(self.inner.to_string())
@@ -748,6 +813,8 @@ pub struct SipRequestBuilder {
     session_expires: Option<crate::sip::headers::SessionExpires>,
     min_se: Option<crate::sip::headers::MinSe>,
     rack: Option<crate::sip::headers::RAck>,
+    allow: Option<Vec<Method>>,
+    routes: Option<Vec<String>>,
 }
 
 impl SipRequestBuilder {
@@ -947,6 +1014,32 @@ impl SipRequestBuilder {
         self
     }
 
+    /// Set the Allow header (RFC 3261 §20.5). Methods are emitted
+    /// comma-separated in the order given. Empty slice clears the header.
+    /// Calling again replaces the previous value.
+    pub fn allow(mut self, methods: &[Method]) -> Self {
+        if methods.is_empty() {
+            self.allow = None;
+        } else {
+            self.allow = Some(methods.to_vec());
+        }
+        self
+    }
+
+    /// Set the `Route` headers (RFC 3261 §12.2.1.1). One Route header is
+    /// emitted per entry, in the order given. Each entry must be a complete
+    /// Route header value (e.g. `<sip:proxy.example.com;lr>`). Empty slice
+    /// clears any previously set routes. Calling again replaces the
+    /// previous value.
+    pub fn route(mut self, routes: &[String]) -> Self {
+        if routes.is_empty() {
+            self.routes = None;
+        } else {
+            self.routes = Some(routes.to_vec());
+        }
+        self
+    }
+
     /// Build the request.
     pub fn build(self) -> Result<SipRequest> {
         // Check for URI parsing errors first (more informative than "Missing URI")
@@ -1095,6 +1188,24 @@ impl SipRequestBuilder {
             ));
         }
 
+        // Allow header (RFC 3261 §20.5)
+        if let Some(methods) = &self.allow {
+            let value = methods
+                .iter()
+                .map(|m| m.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            headers.push(rsip::Header::Allow(rsip::headers::Allow::new(value)));
+        }
+
+        // Route headers (RFC 3261 §12.2.1.1) — one Header::Route per entry,
+        // in order, before Content-Type / Content-Length.
+        if let Some(routes) = &self.routes {
+            for r in routes {
+                headers.push(rsip::Header::Route(rsip::headers::Route::new(r.clone())));
+            }
+        }
+
         // Content-Type and Content-Length
         let body = self.body.unwrap_or_default();
         if !body.is_empty() {
@@ -1140,6 +1251,7 @@ pub struct SipResponseBuilder {
     session_expires: Option<crate::sip::headers::SessionExpires>,
     min_se: Option<crate::sip::headers::MinSe>,
     rseq: Option<crate::sip::headers::RSeq>,
+    allow: Option<Vec<Method>>,
 }
 
 impl SipResponseBuilder {
@@ -1297,6 +1409,18 @@ impl SipResponseBuilder {
         self
     }
 
+    /// Set the Allow header (RFC 3261 §20.5). Methods are emitted
+    /// comma-separated in the order given. Empty slice clears the header.
+    /// Calling again replaces the previous value.
+    pub fn allow(mut self, methods: &[Method]) -> Self {
+        if methods.is_empty() {
+            self.allow = None;
+        } else {
+            self.allow = Some(methods.to_vec());
+        }
+        self
+    }
+
     /// Build the response.
     pub fn build(self) -> Result<SipResponse> {
         let status_code = self
@@ -1374,6 +1498,16 @@ impl SipResponseBuilder {
                 "RSeq".to_string(),
                 rseq.to_header_value(),
             ));
+        }
+
+        // Allow header (RFC 3261 §20.5)
+        if let Some(methods) = &self.allow {
+            let value = methods
+                .iter()
+                .map(|m| m.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            headers.push(rsip::Header::Allow(rsip::headers::Allow::new(value)));
         }
 
         // Content-Type and Content-Length
@@ -3933,6 +4067,110 @@ Content-Length: 0\r\n\
         assert_eq!(
             se.refresher,
             Some(crate::sip::headers::Refresher::Uas)
+        );
+    }
+
+    /// Round-trip Allow through the request builder, the wire, and back
+    /// through the parser so we know the value emitted is the value read.
+    #[test]
+    fn test_request_builder_allow_round_trip() {
+        let req = SipRequest::builder()
+            .method(Method::Update)
+            .uri("sip:bob@example.com")
+            .via("192.168.1.1", 5060, "UDP", "z9hG4bKtest")
+            .from("sip:alice@example.com", "fromtag")
+            .to("sip:bob@example.com")
+            .call_id("c1@example.com")
+            .cseq(2)
+            .allow(&[
+                Method::Invite,
+                Method::Ack,
+                Method::Bye,
+                Method::Cancel,
+                Method::Options,
+                Method::Prack,
+                Method::Update,
+            ])
+            .build()
+            .unwrap();
+
+        let bytes = req.to_bytes();
+        let parsed = SipMessage::parse(&bytes).unwrap();
+        let parsed_req = parsed.as_request().unwrap();
+
+        let allow = parsed_req.allow().expect("Allow must round-trip");
+        assert_eq!(
+            allow,
+            vec![
+                Method::Invite,
+                Method::Ack,
+                Method::Bye,
+                Method::Cancel,
+                Method::Options,
+                Method::Prack,
+                Method::Update,
+            ]
+        );
+
+        // Empty slice clears the header.
+        let req2 = SipRequest::builder()
+            .method(Method::Update)
+            .uri("sip:bob@example.com")
+            .via("192.168.1.1", 5060, "UDP", "z9hG4bKtest")
+            .from("sip:alice@example.com", "fromtag")
+            .to("sip:bob@example.com")
+            .call_id("c1@example.com")
+            .cseq(2)
+            .allow(&[Method::Invite])
+            .allow(&[])
+            .build()
+            .unwrap();
+        assert!(req2.allow().is_none(), "empty slice clears Allow");
+    }
+
+    /// Mirror for SipResponse. Also exercises the read side with unknown
+    /// method tokens — they must be skipped silently rather than failing.
+    #[test]
+    fn test_response_builder_allow_round_trip_skips_unknown() {
+        let req = SipRequest::builder()
+            .method(Method::Invite)
+            .uri("sip:bob@example.com")
+            .via("192.168.1.1", 5060, "UDP", "z9hG4bKtest")
+            .from("sip:alice@example.com", "fromtag")
+            .to("sip:bob@example.com")
+            .call_id("c1@example.com")
+            .cseq(1)
+            .build()
+            .unwrap();
+
+        let resp = SipResponse::builder()
+            .status(200, "OK")
+            .from_request(&req)
+            .to_tag("totag")
+            .allow(&[Method::Invite, Method::Bye, Method::Update])
+            .build()
+            .unwrap();
+
+        let bytes = resp.to_bytes();
+        let parsed = SipMessage::parse(&bytes).unwrap();
+        let parsed_resp = parsed.as_response().unwrap();
+
+        let allow = parsed_resp.allow().expect("Allow must round-trip");
+        assert_eq!(allow, vec![Method::Invite, Method::Bye, Method::Update]);
+
+        // Inject an unknown method token alongside known ones — the parser
+        // must skip the unknown rather than fail the whole header.
+        let mut resp2 = resp.clone();
+        resp2.inner_mut().headers.push(rsip::Header::Other(
+            "Allow".to_string(),
+            "FOO, OPTIONS".to_string(),
+        ));
+        let allow2 = resp2.allow().expect("still parseable with one unknown");
+        // Combined: native Allow already there + Other Allow appended.
+        // Order: native Allow first (Invite, Bye, Update), then Other (Options).
+        assert_eq!(
+            allow2,
+            vec![Method::Invite, Method::Bye, Method::Update, Method::Options],
         );
     }
 }
