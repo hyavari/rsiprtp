@@ -186,6 +186,27 @@ a worked example rather than part of the public API.
 [`audio-codec-algorithms`](https://crates.io/crates/audio-codec-algorithms)
 for codecs.
 
+## Testing
+
+Run the standard cargo bar:
+
+```sh
+cargo test --workspace --exclude gabby -- --test-threads=1
+```
+
+For a one-shot full check (fmt, clippy, cargo-deny, build, tests, doc,
+coverage) with an HTML report under `crates/rsiprtp/tests/results/`,
+use the `full_test` runner:
+
+```sh
+cargo run --release -p full_test          # everything
+cargo run --release -p full_test -- --skip-coverage  # ~3 min faster
+cargo run --release -p full_test -- --help           # all flags
+```
+
+See `wrk_docs/2026.05.02 - HLD - full_test runner - V2.md` for design
+notes.
+
 ## Contributing
 
 Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md)

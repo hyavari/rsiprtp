@@ -34,6 +34,11 @@ cargo fmt --check
 
 # Code coverage
 cargo llvm-cov
+
+# Run the full test bar (fmt, clippy, cargo-deny, build, tests, doc,
+# coverage) and write a dated HTML report to
+# crates/rsiprtp/tests/results/. See `--help` for skip flags.
+cargo run --release -p full_test
 ```
 
 ## Integration Testing

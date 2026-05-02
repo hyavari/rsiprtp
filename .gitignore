@@ -39,3 +39,6 @@ desktop.ini
 
 # Logs
 *.log
+
+# full_test runner output (HTML reports under crates/rsiprtp/tests/results/)
+crates/rsiprtp/tests/results/*.html
