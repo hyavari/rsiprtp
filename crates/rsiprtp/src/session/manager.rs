@@ -753,7 +753,7 @@ impl CallManager {
     /// `RSeq:`, the UAC must send a PRACK whose `RAck:` echoes the
     /// RSeq, the original INVITE's CSeq, and `INVITE`. The PRACK is
     /// appended to the manager's outbound queue (drainable via
-    /// [`drain_outbound_requests`]) and also returned for callers
+    /// [`Self::drain_outbound_requests`]) and also returned for callers
     /// preferring direct dispatch.
     ///
     /// Returns `None` when the response is not actually reliable

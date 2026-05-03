@@ -112,9 +112,7 @@ async fn outbound_call_choreography(
         async fn recv_msg() -> Result<SipMessage, Box<dyn std::error::Error>> {
             unreachable!("documentation-only stub")
         }
-        async fn send_to_peer(
-            _bytes: bytes::Bytes,
-        ) -> Result<(), Box<dyn std::error::Error>> {
+        async fn send_to_peer(_bytes: bytes::Bytes) -> Result<(), Box<dyn std::error::Error>> {
             unreachable!("documentation-only stub")
         }
         async fn dispatch_outbound(

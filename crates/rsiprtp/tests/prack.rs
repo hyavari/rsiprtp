@@ -351,10 +351,7 @@ fn test_prack_timeout_emits_504() {
                 InviteServerAction::SetTimer(Timer::N, d) => {
                     scheduled_total += d;
                 }
-                InviteServerAction::Event(InviteServerEvent::PrackTimeout {
-                    rseq,
-                    final_sent,
-                }) => {
+                InviteServerAction::Event(InviteServerEvent::PrackTimeout { rseq, final_sent }) => {
                     assert_eq!(rseq, 1, "PrackTimeout rseq must be 1");
                     final_sent_observed = Some(final_sent);
                     saw_timeout = true;
