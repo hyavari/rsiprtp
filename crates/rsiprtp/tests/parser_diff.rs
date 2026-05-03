@@ -22,6 +22,9 @@ use rsiprtp::sip::SipUri;
 // forms wrap NameAddr; rsip's live under `rsip::typed::*`.
 use rsiprtp::sip::parser::typed::{From as OurFrom, To as OurTo};
 
+// M5: typed-form imports for Via, CSeq, Contact.
+use rsiprtp::sip::parser::typed::{CSeq as OurCSeq, Contact as OurContact, Via as OurVia};
+
 // ---------------------------------------------------------------
 // Neutral representation
 // ---------------------------------------------------------------
@@ -655,6 +658,354 @@ fn assert_typed_from_to_equivalent(bytes: &[u8]) {
 }
 
 // ---------------------------------------------------------------
+// Tier-2: typed `Via` / `CSeq` / `Contact` diff (M5)
+// ---------------------------------------------------------------
+
+/// Neutral Tier-2 representation of a single `Via` header value.
+///
+/// Built from either the rsip or our typed form, then compared
+/// field-by-field. Normalization choices:
+/// - `protocol`: trimmed, case preserved (`SIP/2.0` is the only
+///   thing in the wild; case is the spec).
+/// - `transport`: upper-cased — rsip's typed Display emits
+///   canonical upper, our parser preserves wire case. Per
+///   RFC 3261 §20.42 the transport token is case-insensitive
+///   for equality.
+/// - `sent_by`: lower-cased — RFC 3261 §19.1.4 / §20.42 host is
+///   case-insensitive. Port preserved as text.
+/// - `parameters`: same key-sorted, lower-cased-key normalization
+///   used elsewhere. We deliberately keep the value verbatim so a
+///   real parameter-value divergence surfaces.
+#[derive(Debug, PartialEq, Eq)]
+struct DiffVia {
+    protocol: String,
+    transport: String,
+    sent_by: String,
+    parameters: Vec<(String, Option<String>)>,
+}
+
+/// Neutral Tier-2 representation of `CSeq`. Method canonicalized
+/// to upper-case (rsip's Display does this; ours via `as_str()`).
+#[derive(Debug, PartialEq, Eq)]
+struct DiffCSeq {
+    seq: u32,
+    method: String,
+}
+
+/// Neutral Tier-2 representation of `Contact`. The wildcard form
+/// is its own variant — rsip's typed::Contact does NOT model the
+/// wildcard, so we only assert equivalence on the non-wildcard
+/// path (and sanity-check our wildcard handling separately, see
+/// `typed_contact_wildcard_*`).
+#[derive(Debug, PartialEq, Eq)]
+enum DiffContact {
+    Wildcard,
+    Addr(DiffNameAddr),
+}
+
+fn rsip_via_diff(value: &str) -> Result<DiffVia, String> {
+    use rsip::headers::untyped::{ToTypedHeader, UntypedHeader};
+    let untyped = rsip::headers::Via::new(value);
+    let typed = untyped.typed().map_err(|e| format!("rsip Via: {e}"))?;
+    let params: Vec<(String, Option<String>)> =
+        typed.params.iter().map(rsip_param_to_pair).collect();
+    // rsip stores sent-by as a `Uri`. We want the "host[:port]"
+    // string only — its Display includes scheme prefix on
+    // sip-form URIs but for a Via sent-by tokenized via
+    // `Tokenizer::tokenize_without_params` rsip parses the host
+    // and (optionally) port without a scheme; Display still
+    // emits the scheme (`sip:`) which would mismatch our
+    // representation. Build the "host[:port]" form by hand.
+    let host = typed.uri.host_with_port.host.to_string();
+    let sent_by = match &typed.uri.host_with_port.port {
+        Some(p) => format!("{}:{}", host, p),
+        None => host,
+    };
+    Ok(DiffVia {
+        protocol: format!("{}", typed.version),
+        transport: typed.transport.to_string().to_ascii_uppercase(),
+        sent_by: normalize_sent_by(&sent_by),
+        parameters: normalize_params(params),
+    })
+}
+
+fn ours_via_diff(value: &str) -> Result<DiffVia, String> {
+    let v = OurVia::parse(value).map_err(|e| format!("ours Via: {e}"))?;
+    Ok(DiffVia {
+        protocol: v.protocol.clone(),
+        transport: v.transport.to_ascii_uppercase(),
+        sent_by: normalize_sent_by(&v.sent_by),
+        parameters: normalize_params(v.params.clone()),
+    })
+}
+
+/// Lower-case the host part of a `host[:port]` string, leaving
+/// the port (if any) verbatim. IPv6 references stay bracketed.
+fn normalize_sent_by(s: &str) -> String {
+    // Find a colon outside brackets: IPv6 has internal colons,
+    // and `[v6]:port` ends in `]:NNN`. Only the *last* colon
+    // outside brackets is the port separator.
+    let bytes = s.as_bytes();
+    let mut depth = 0i32;
+    let mut last_colon: Option<usize> = None;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'[' => depth += 1,
+            b']' => depth -= 1,
+            b':' if depth == 0 => last_colon = Some(i),
+            _ => {}
+        }
+    }
+    match last_colon {
+        Some(idx) => {
+            let host = s[..idx].to_ascii_lowercase();
+            let port = &s[idx..];
+            format!("{}{}", host, port)
+        }
+        None => s.to_ascii_lowercase(),
+    }
+}
+
+fn rsip_cseq_diff(value: &str) -> Result<DiffCSeq, String> {
+    use rsip::headers::untyped::{ToTypedHeader, UntypedHeader};
+    let untyped = rsip::headers::CSeq::new(value);
+    let typed = untyped.typed().map_err(|e| format!("rsip CSeq: {e}"))?;
+    Ok(DiffCSeq {
+        seq: typed.seq,
+        method: typed.method.to_string(),
+    })
+}
+
+fn ours_cseq_diff(value: &str) -> Result<DiffCSeq, String> {
+    let c = OurCSeq::parse(value).map_err(|e| format!("ours CSeq: {e}"))?;
+    Ok(DiffCSeq {
+        seq: c.seq,
+        method: c.method.as_str().to_string(),
+    })
+}
+
+fn rsip_contact_diff(value: &str) -> Result<DiffContact, String> {
+    let trimmed = value.trim();
+    if trimmed == "*" {
+        // rsip's typed Contact does NOT model the wildcard; if we
+        // see one, surface it as Wildcard so the Addr-equivalence
+        // check skips this header. Our parser produces Wildcard
+        // for the same input.
+        return Ok(DiffContact::Wildcard);
+    }
+    use rsip::headers::untyped::{ToTypedHeader, UntypedHeader};
+    let untyped = rsip::headers::Contact::new(value);
+    let typed = untyped.typed().map_err(|e| format!("rsip Contact: {e}"))?;
+    let params: Vec<(String, Option<String>)> =
+        typed.params.iter().map(rsip_param_to_pair).collect();
+    Ok(DiffContact::Addr(DiffNameAddr {
+        display_name: typed.display_name.as_deref().map(unquote_display_name),
+        uri: NormalizedUri::from_str(&typed.uri.to_string()),
+        parameters: normalize_params(params),
+    }))
+}
+
+fn ours_contact_diff(value: &str) -> Result<DiffContact, String> {
+    let c = OurContact::parse(value).map_err(|e| format!("ours Contact: {e}"))?;
+    match c {
+        OurContact::Wildcard => Ok(DiffContact::Wildcard),
+        OurContact::Addr(a) => Ok(DiffContact::Addr(DiffNameAddr {
+            display_name: a.display_name.clone(),
+            uri: NormalizedUri::from_str(&a.uri.to_string()),
+            parameters: normalize_params(a.params.clone()),
+        })),
+    }
+}
+
+/// Run the Tier-2 typed-form diff for `Via`, `CSeq`, and
+/// `Contact` on `bytes`. Each parser's own header list is the
+/// source of raw values (so each parser sees its own input),
+/// then the typed forms are compared.
+///
+/// Multiple `Via` headers per message are diffed pairwise in
+/// order. CSeq is exactly one per message. Multiple `Contact`
+/// headers are diffed pairwise in order.
+fn assert_typed_via_cseq_contact_equivalent(bytes: &[u8]) {
+    use rsip::headers::untyped::UntypedHeader as _;
+    use rsip::SipMessage as RsipMsg;
+
+    let rs_msg = match RsipMsg::try_from(bytes) {
+        Ok(m) => m,
+        Err(_) => return,
+    };
+    let our_msg = match OurMessage::parse(bytes) {
+        Ok(m) => m,
+        Err(_) => return,
+    };
+
+    let rs_headers: &rsip::Headers = match &rs_msg {
+        RsipMsg::Request(r) => &r.headers,
+        RsipMsg::Response(r) => &r.headers,
+    };
+    let our_headers = match &our_msg {
+        OurMessage::Request(r) => &r.headers,
+        OurMessage::Response(r) => &r.headers,
+    };
+
+    // -- Via (multiple per message possible) --
+    //
+    // rsip's Header::Via only matches the `Via:` long form. Compact
+    // `v: ...` (RFC 3261 §20.42) lands in Header::Other("v", ...)
+    // because rsip 0.4 doesn't resolve compact forms before the typed
+    // dispatch. Pick up both shapes here so the count and value match
+    // our parser (which DOES normalize compact → long-form).
+    let rs_vias: Vec<String> = rs_headers
+        .iter()
+        .filter_map(|h| match h {
+            rsip::Header::Via(v) => Some(v.value().to_string()),
+            rsip::Header::Other(name, value) if name.eq_ignore_ascii_case("v") => {
+                Some(value.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    let our_vias: Vec<String> = our_headers
+        .iter()
+        .filter_map(|h| match h {
+            OurHeader::Via(v) => Some(v.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        rs_vias.len(),
+        our_vias.len(),
+        "Via header count differs: rsip {} vs ours {} ({:?} vs {:?})",
+        rs_vias.len(),
+        our_vias.len(),
+        rs_vias,
+        our_vias,
+    );
+    for (rs_v, our_v) in rs_vias.iter().zip(our_vias.iter()) {
+        let rs = rsip_via_diff(rs_v);
+        let ours = ours_via_diff(our_v);
+        match (rs, ours) {
+            (Ok(a), Ok(b)) => {
+                if a != b {
+                    panic!(
+                        "TYPED-VIA DIVERGENCE.\n\
+                         rsip-value: {rs_v:?}\n\
+                         our-value:  {our_v:?}\n\
+                         rsip:\n{a:#?}\n\
+                         ours:\n{b:#?}",
+                    );
+                }
+            }
+            (Err(_), Err(_)) => {}
+            (Ok(_), Err(e)) => panic!(
+                "rsip accepted typed Via but ours rejected.\n\
+                 value: {our_v:?}\n\
+                 ours error: {e}",
+            ),
+            (Err(e), Ok(_)) => panic!(
+                "ours accepted typed Via but rsip rejected.\n\
+                 value: {rs_v:?}\n\
+                 rsip error: {e}",
+            ),
+        }
+    }
+
+    // -- CSeq (exactly one per valid message) --
+    let rs_cseq = rs_headers.iter().find_map(|h| match h {
+        rsip::Header::CSeq(v) => Some(v.value().to_string()),
+        _ => None,
+    });
+    let our_cseq = our_headers.iter().find_map(|h| match h {
+        OurHeader::CSeq(v) => Some(v.clone()),
+        _ => None,
+    });
+    if let (Some(rs_v), Some(our_v)) = (rs_cseq.as_deref(), our_cseq.as_deref()) {
+        let rs = rsip_cseq_diff(rs_v);
+        let ours = ours_cseq_diff(our_v);
+        match (rs, ours) {
+            (Ok(a), Ok(b)) => {
+                if a != b {
+                    panic!(
+                        "TYPED-CSEQ DIVERGENCE.\n\
+                         rsip-value: {rs_v:?}\n\
+                         our-value:  {our_v:?}\n\
+                         rsip:\n{a:#?}\n\
+                         ours:\n{b:#?}",
+                    );
+                }
+            }
+            (Err(_), Err(_)) => {}
+            (Ok(_), Err(e)) => panic!(
+                "rsip accepted typed CSeq but ours rejected.\n\
+                 value: {our_v:?}\n\
+                 ours error: {e}",
+            ),
+            (Err(e), Ok(_)) => panic!(
+                "ours accepted typed CSeq but rsip rejected.\n\
+                 value: {rs_v:?}\n\
+                 rsip error: {e}",
+            ),
+        }
+    }
+
+    // -- Contact (multiple per message possible) --
+    //
+    // Compact form `m:` falls into rsip's Header::Other (same reason
+    // as Via above).
+    let rs_contacts: Vec<String> = rs_headers
+        .iter()
+        .filter_map(|h| match h {
+            rsip::Header::Contact(v) => Some(v.value().to_string()),
+            rsip::Header::Other(name, value) if name.eq_ignore_ascii_case("m") => {
+                Some(value.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    let our_contacts: Vec<String> = our_headers
+        .iter()
+        .filter_map(|h| match h {
+            OurHeader::Contact(v) => Some(v.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        rs_contacts.len(),
+        our_contacts.len(),
+        "Contact header count differs: rsip {} vs ours {}",
+        rs_contacts.len(),
+        our_contacts.len(),
+    );
+    for (rs_v, our_v) in rs_contacts.iter().zip(our_contacts.iter()) {
+        let rs = rsip_contact_diff(rs_v);
+        let ours = ours_contact_diff(our_v);
+        match (rs, ours) {
+            (Ok(a), Ok(b)) => {
+                if a != b {
+                    panic!(
+                        "TYPED-CONTACT DIVERGENCE.\n\
+                         rsip-value: {rs_v:?}\n\
+                         our-value:  {our_v:?}\n\
+                         rsip:\n{a:#?}\n\
+                         ours:\n{b:#?}",
+                    );
+                }
+            }
+            (Err(_), Err(_)) => {}
+            (Ok(_), Err(e)) => panic!(
+                "rsip accepted typed Contact but ours rejected.\n\
+                 value: {our_v:?}\n\
+                 ours error: {e}",
+            ),
+            (Err(e), Ok(_)) => panic!(
+                "ours accepted typed Contact but rsip rejected.\n\
+                 value: {rs_v:?}\n\
+                 rsip error: {e}",
+            ),
+        }
+    }
+}
+
+// ---------------------------------------------------------------
 // Equivalence assertion
 // ---------------------------------------------------------------
 
@@ -687,6 +1038,8 @@ fn assert_equivalent(bytes: &[u8]) {
     // result handling because we want to surface typed-form
     // divergences even where Tier-1 was clean.
     assert_typed_from_to_equivalent(bytes);
+    // Tier-2: typed Via/CSeq/Contact check (M5).
+    assert_typed_via_cseq_contact_equivalent(bytes);
 }
 
 // ---------------------------------------------------------------
@@ -946,6 +1299,223 @@ fn unquote_display_name_handles_escapes() {
         r#"He said "hi""#
     );
     assert_eq!(unquote_display_name("Alice"), "Alice"); // no quotes, pass-through
+}
+
+/// M4 follow-up (HLD note): quoted parameter values containing a
+/// semicolon. RFC 3261 §25.1 `gen-value = token / host /
+/// quoted-string`, so `;name="x;y"` is legal and the inner `;` is
+/// NOT a parameter separator.
+///
+/// Investigation result (DA's flagged divergence): **rsip 0.4
+/// rejects the entire input** when a generic-param value is a
+/// quoted-string containing a `;`. Its `name_params` tokenizer
+/// splits on `;` first, then runs token-only matching on the
+/// segments — `name="x` is left over as "trailing input" and
+/// fails. Our parser correctly honors the quoted-string boundary
+/// (see `name_addr::parse_params`) and accepts the input.
+///
+/// This is a one-accepts / one-rejects case. Per the HLD's diff
+/// triage policy ("spec is explicit (fix the wrong one)") the
+/// spec is on our side: §25.1 `gen-value = token / host /
+/// quoted-string`. We document the asymmetry here rather than
+/// silently masking it. When rsip is dropped at M10 this test
+/// becomes a direct on-our-parser assertion (no rsip side).
+#[test]
+fn typed_from_quoted_param_value_with_semicolon_rsip_rejects() {
+    let v = r#"<sip:a@b>;tag=t;name="x;y""#;
+    // Our parser accepts and produces two params, with the
+    // semicolon-bearing value intact inside the quoted string.
+    let d = ours_from_to_diff(v).unwrap();
+    assert_eq!(d.parameters.len(), 2, "ours: {:?}", d.parameters);
+    let name_value = d
+        .parameters
+        .iter()
+        .find(|(k, _)| k == "name")
+        .and_then(|(_, v)| v.as_deref());
+    // The value retains its surrounding quotes (matches our
+    // NameAddr behavior — see `test_quoted_param_value` there).
+    assert_eq!(name_value, Some("\"x;y\""));
+    // rsip rejects this. Pin that for documentation; if a future
+    // rsip update fixes it the assertion will fire and we can
+    // tighten the harness.
+    let r = rsip_from_to_diff(v);
+    assert!(
+        r.is_err(),
+        "rsip 0.4 rejects quoted-param-with-semicolon; \
+         got Ok({r:?}) — update this test if rsip changed",
+    );
+}
+
+/// Sister test: a quoted param value WITHOUT a semicolon. rsip
+/// 0.4 still rejects this — its `name_params` tokenizer doesn't
+/// model `gen-value = quoted-string` *at all* (not just the
+/// semicolon-inside subcase). Confirms the divergence is broader
+/// than the semicolon case.
+///
+/// Our parser accepts and stores the value with surrounding
+/// quotes preserved; consumers who want the unquoted text apply
+/// `unquote_display_name`-style stripping at the call site. We
+/// pin both shapes here.
+#[test]
+fn typed_from_quoted_param_value_rsip_rejects_broadly() {
+    let v = r#"<sip:a@b>;tag=t;name="hello""#;
+    let d = ours_from_to_diff(v).unwrap();
+    // Our parser keeps surrounding quotes verbatim.
+    let name_value = d
+        .parameters
+        .iter()
+        .find(|(k, _)| k == "name")
+        .and_then(|(_, v)| v.as_deref());
+    assert_eq!(name_value, Some("\"hello\""));
+    let r = rsip_from_to_diff(v);
+    assert!(
+        r.is_err(),
+        "rsip 0.4 rejects all quoted-string param values; got \
+         Ok({r:?}) — update this test if rsip changed",
+    );
+}
+
+// ---------------------------------------------------------------
+// Sanity tests for the typed-form (M5) Via/CSeq/Contact path
+// ---------------------------------------------------------------
+
+#[test]
+fn typed_via_basic_normalizes() {
+    let v = "SIP/2.0/UDP host.example.com:5060;branch=z9hG4bK1";
+    let d = ours_via_diff(v).unwrap();
+    let r = rsip_via_diff(v).unwrap();
+    assert_eq!(d, r);
+    assert_eq!(d.protocol, "SIP/2.0");
+    assert_eq!(d.transport, "UDP");
+    assert_eq!(d.sent_by, "host.example.com:5060");
+}
+
+#[test]
+fn typed_via_transport_case_normalized_to_upper() {
+    let v_upper = "SIP/2.0/UDP host:5060;branch=z";
+    let v_lower = "SIP/2.0/udp host:5060;branch=z";
+    let d_upper = ours_via_diff(v_upper).unwrap();
+    let d_lower = ours_via_diff(v_lower).unwrap();
+    assert_eq!(d_upper.transport, d_lower.transport);
+}
+
+#[test]
+fn typed_via_host_case_normalized_to_lower() {
+    let v_lc = "SIP/2.0/UDP host.example.com:5060;branch=z";
+    let v_uc = "SIP/2.0/UDP HOST.EXAMPLE.COM:5060;branch=z";
+    let d_lc = ours_via_diff(v_lc).unwrap();
+    let d_uc = ours_via_diff(v_uc).unwrap();
+    assert_eq!(d_lc.sent_by, d_uc.sent_by);
+}
+
+/// RFC 3261 §20.42 + RFC 5118 §4.1: Via sent-by may be a bracketed
+/// IPv6 reference, e.g. `[2001:db8::1]:5060`. **rsip 0.4 rejects
+/// this** — its sent-by tokenizer doesn't model the
+/// `IP6reference` production. Our parser accepts it (see
+/// `via::test_parse_ipv6_with_port`).
+///
+/// Like the quoted-param-with-semicolon case, this is a
+/// one-accepts/one-rejects divergence where the spec is on our
+/// side. Pin the asymmetry; tighten when rsip is dropped at M10.
+#[test]
+fn typed_via_ipv6_rsip_rejects() {
+    let v = "SIP/2.0/UDP [2001:db8::1]:5060;branch=z9hG4bKabc";
+    let d = ours_via_diff(v).unwrap();
+    assert_eq!(d.sent_by, "[2001:db8::1]:5060");
+    let r = rsip_via_diff(v);
+    assert!(
+        r.is_err(),
+        "rsip 0.4 rejects IPv6 sent-by; got Ok({r:?}) — \
+         update this test if rsip changed",
+    );
+}
+
+#[test]
+fn typed_via_rport_flag_and_value_both_match_rsip() {
+    // rport without value (client request): rsip stores as
+    // Other("rport", None); we as ("rport", None).
+    let v_flag = "SIP/2.0/UDP host:5060;branch=z;rport";
+    let d_flag = ours_via_diff(v_flag).unwrap();
+    let r_flag = rsip_via_diff(v_flag).unwrap();
+    assert_eq!(d_flag, r_flag);
+
+    // rport with value (server response).
+    let v_val = "SIP/2.0/UDP host:5060;branch=z;rport=12345";
+    let d_val = ours_via_diff(v_val).unwrap();
+    let r_val = rsip_via_diff(v_val).unwrap();
+    assert_eq!(d_val, r_val);
+}
+
+#[test]
+fn typed_cseq_basic_normalizes() {
+    let v = "1 INVITE";
+    let d = ours_cseq_diff(v).unwrap();
+    let r = rsip_cseq_diff(v).unwrap();
+    assert_eq!(d, r);
+    assert_eq!(d.seq, 1);
+    assert_eq!(d.method, "INVITE");
+}
+
+#[test]
+fn typed_cseq_method_case_normalized() {
+    // rsip Display upper-cases; our Method::as_str() also upper.
+    let v = "42 invite";
+    let d = ours_cseq_diff(v).unwrap();
+    let r = rsip_cseq_diff(v).unwrap();
+    assert_eq!(d, r);
+    assert_eq!(d.method, "INVITE");
+}
+
+#[test]
+fn typed_cseq_high_seq_numbers() {
+    let v = format!("{} BYE", u32::MAX);
+    let d = ours_cseq_diff(&v).unwrap();
+    let r = rsip_cseq_diff(&v).unwrap();
+    assert_eq!(d, r);
+    assert_eq!(d.seq, u32::MAX);
+}
+
+#[test]
+fn typed_contact_simple_normalizes() {
+    let v = "<sip:alice@example.com>;expires=3600";
+    let d = ours_contact_diff(v).unwrap();
+    let r = rsip_contact_diff(v).unwrap();
+    assert_eq!(d, r);
+    if let DiffContact::Addr(a) = &d {
+        assert!(a.display_name.is_none());
+    } else {
+        panic!("expected Addr");
+    }
+}
+
+#[test]
+fn typed_contact_wildcard_handled_on_both_sides() {
+    let v = "*";
+    let d = ours_contact_diff(v).unwrap();
+    let r = rsip_contact_diff(v).unwrap();
+    assert!(matches!(d, DiffContact::Wildcard));
+    assert!(matches!(r, DiffContact::Wildcard));
+}
+
+#[test]
+fn typed_contact_with_quoted_display_normalizes() {
+    let v = r#""Alice" <sip:alice@example.com>;expires=300;q=0.7"#;
+    let d = ours_contact_diff(v).unwrap();
+    let r = rsip_contact_diff(v).unwrap();
+    assert_eq!(d, r);
+    if let DiffContact::Addr(a) = &d {
+        assert_eq!(a.display_name.as_deref(), Some("Alice"));
+    } else {
+        panic!("expected Addr");
+    }
+}
+
+#[test]
+fn typed_contact_bare_addr_spec_normalizes() {
+    let v = "sip:bob@example.com;expires=60";
+    let d = ours_contact_diff(v).unwrap();
+    let r = rsip_contact_diff(v).unwrap();
+    assert_eq!(d, r);
 }
 
 #[test]

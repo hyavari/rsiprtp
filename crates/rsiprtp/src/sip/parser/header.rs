@@ -161,6 +161,33 @@ impl Header {
         }
     }
 
+    /// If this is a `Via:` header, parse its value into the typed
+    /// form. Returns `None` for any other variant.
+    pub fn typed_via(&self) -> Option<Result<super::typed::Via, SipError>> {
+        match self {
+            Header::Via(value) => Some(super::typed::Via::parse(value)),
+            _ => None,
+        }
+    }
+
+    /// If this is a `CSeq:` header, parse its value into the typed
+    /// form. Returns `None` for any other variant.
+    pub fn typed_cseq(&self) -> Option<Result<super::typed::CSeq, SipError>> {
+        match self {
+            Header::CSeq(value) => Some(super::typed::CSeq::parse(value)),
+            _ => None,
+        }
+    }
+
+    /// If this is a `Contact:` header, parse its value into the
+    /// typed form. Returns `None` for any other variant.
+    pub fn typed_contact(&self) -> Option<Result<super::typed::Contact, SipError>> {
+        match self {
+            Header::Contact(value) => Some(super::typed::Contact::parse(value)),
+            _ => None,
+        }
+    }
+
     /// Parse one wire-format header line of the form `"Name: value"`.
     ///
     /// The line must NOT contain CRLF (framing strips that). Folding
