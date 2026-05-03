@@ -386,11 +386,18 @@ mod uri_parsing {
         assert_eq!(uri.get_param("method"), Some("REGISTER"));
     }
 
-    /// RFC 3261 Section 19.1.4: Tel URI (should fail as not SIP/SIPS)
+    /// RFC 3261 §19.1.6 / RFC 3966: `tel:` URIs are valid SIP targets.
+    /// M3 absorbed mdsiprtp3's tel-scheme support, so this case now
+    /// parses successfully (was a deliberate behavior change — the
+    /// previous rejection encoded an incorrect interpretation of the
+    /// scheme allowlist).
     #[test]
-    fn test_tel_uri_rejected() {
-        let result = SipUri::parse("tel:+1-212-555-1212");
-        assert!(result.is_err());
+    fn test_tel_uri_accepted() {
+        let uri = SipUri::parse("tel:+1-212-555-1212").unwrap();
+        assert_eq!(uri.scheme(), "tel");
+        assert_eq!(uri.host(), "+1-212-555-1212");
+        assert_eq!(uri.user(), None);
+        assert_eq!(uri.port(), None);
     }
 
     /// RFC 3261 Section 19.1.1: IPv6 address in URI

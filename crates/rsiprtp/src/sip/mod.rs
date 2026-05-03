@@ -36,7 +36,7 @@ pub use headers::{
 };
 
 // Re-export URI types
-pub use uri::{SipUri, SipUriBuilder};
+pub use uri::{Scheme, SipUri, SipUriBuilder};
 
 // Re-export rsip types for convenience
 pub use rsip::Uri as RsipUri;

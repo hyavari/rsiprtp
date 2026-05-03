@@ -16,14 +16,97 @@
 //! See `wrk_docs/2026.05.03 - HLD - sip-parser-rewrite.md`.
 
 use rsiprtp::sip::parser::{Header as OurHeader, Message as OurMessage};
+use rsiprtp::sip::SipUri;
 
 // ---------------------------------------------------------------
 // Neutral representation
 // ---------------------------------------------------------------
 
+/// Structurally-normalized URI for diff comparison.
+///
+/// Per HLD §"Differential-test harness" (point 2): "uri:
+/// NormalizedUri (lowercased scheme/host, parameters
+/// order-independent)". RFC 3261 §19.1.4 says URI parameters are
+/// unordered for equality. We additionally:
+/// - lowercase scheme and host (also case-insensitive per
+///   §19.1.4),
+/// - sort parameters by lowercased key (RFC 3261 §19.1.4 — order
+///   does not matter for equality),
+/// - sort URI headers by lowercased name (same reasoning, applied
+///   conservatively — RFC 3261 doesn't pin URI-header order
+///   either).
+///
+/// Parameter values that are present-with-empty (`;foo=`) are kept
+/// distinct from parameter-absent values (`;foo`) — both rsip and
+/// our parser distinguish these. We do NOT lowercase param/header
+/// values: per RFC 3261 §19.1.4 the values of `user`, `ttl`,
+/// `method`, `maddr`, `transport` are case-sensitive (`method` is
+/// SHOULD-be-uppercase, `transport` is case-insensitive, but
+/// blanket-lowercasing them risks hiding real bugs in either
+/// parser).
+#[derive(Debug, PartialEq, Eq)]
+struct NormalizedUri {
+    /// `"sip"`, `"sips"`, or `"tel"` — lowercased.
+    scheme: String,
+    /// User part (case-sensitive per RFC 3261 §19.1.4 — the user
+    /// portion is opaque).
+    user: Option<String>,
+    /// Host lowercased (RFC 3261 §19.1.4 — host comparison is
+    /// case-insensitive).
+    host: String,
+    /// Port number (None means absent — distinct from default).
+    port: Option<u16>,
+    /// Sorted by lowercased key.
+    params: Vec<(String, Option<String>)>,
+    /// Sorted by lowercased name.
+    headers: Vec<(String, String)>,
+    /// Set if the URI string failed to parse via our `SipUri::parse`
+    /// — we fall back to the raw string in that case so the harness
+    /// can still compare. A real bug would surface here as one
+    /// parser succeeding and the other failing on the same URI.
+    raw_fallback: Option<String>,
+}
+
+impl NormalizedUri {
+    fn from_str(s: &str) -> Self {
+        match SipUri::parse(s) {
+            Ok(uri) => {
+                let mut params: Vec<(String, Option<String>)> = uri
+                    .params()
+                    .map(|(k, v)| (k.to_ascii_lowercase(), v.map(|s| s.to_string())))
+                    .collect();
+                params.sort_by(|a, b| a.0.cmp(&b.0));
+                let mut headers: Vec<(String, String)> = uri
+                    .headers()
+                    .map(|(k, v)| (k.to_ascii_lowercase(), v.to_string()))
+                    .collect();
+                headers.sort_by(|a, b| a.0.cmp(&b.0));
+                NormalizedUri {
+                    scheme: uri.scheme().to_string(),
+                    user: uri.user().map(|u| u.to_string()),
+                    host: uri.host().to_ascii_lowercase(),
+                    port: uri.port(),
+                    params,
+                    headers,
+                    raw_fallback: None,
+                }
+            }
+            Err(_) => NormalizedUri {
+                scheme: String::new(),
+                user: None,
+                host: String::new(),
+                port: None,
+                params: Vec::new(),
+                headers: Vec::new(),
+                raw_fallback: Some(s.to_string()),
+            },
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum DiffKind {
-    Request { method: String, uri_raw: String },
+    Request { method: String, uri: NormalizedUri },
     Response { status: u16 },
 }
 
@@ -153,13 +236,9 @@ fn rsip_to_diff(bytes: &[u8]) -> Result<DiffMessage, String> {
     let (kind, headers, body) = match msg {
         SipMessage::Request(req) => {
             let method = req.method.to_string();
-            let uri_raw = req.uri.to_string();
+            let uri = NormalizedUri::from_str(&req.uri.to_string());
             let headers = collect_rsip_headers(&req.headers);
-            (
-                DiffKind::Request { method, uri_raw },
-                headers,
-                req.body.clone(),
-            )
+            (DiffKind::Request { method, uri }, headers, req.body.clone())
         }
         SipMessage::Response(resp) => {
             let status: u16 = resp.status_code.clone().into();
@@ -279,13 +358,9 @@ fn ours_to_diff(bytes: &[u8]) -> Result<DiffMessage, String> {
     let (kind, headers, body) = match msg {
         OurMessage::Request(req) => {
             let method = req.method.as_str().to_string();
-            let uri_raw = req.uri.clone();
+            let uri = NormalizedUri::from_str(&req.uri);
             let headers = collect_our_headers(&req.headers);
-            (
-                DiffKind::Request { method, uri_raw },
-                headers,
-                req.body.clone(),
-            )
+            (DiffKind::Request { method, uri }, headers, req.body.clone())
         }
         OurMessage::Response(resp) => {
             let status = resp.status_code.as_u16();

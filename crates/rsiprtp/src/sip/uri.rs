@@ -2,93 +2,191 @@
 //!
 //! This module provides a wrapper around SIP URIs with convenience methods
 //! for common operations like extracting user, host, and transport information.
+//!
+//! Coverage of RFC 3261 §19.1 and RFC 3966 (`tel:` URIs):
+//!
+//! - `sip:` and `sips:` schemes with full `user@host:port;params?headers`
+//!   syntax (RFC 3261 §19.1.1).
+//! - `tel:` URIs (RFC 3966) — phone-number, parameters, headers. Stored in
+//!   the same `SipUri` struct with `scheme = Tel`; the phone-number lives
+//!   in the `host` field, `user` is always `None`, `port` is always `None`.
+//! - URI headers (`?key=value&...`) are parsed, preserved, and re-emitted
+//!   on `Display`. Used for embedded message-construction targets such as
+//!   `sip:foo@bar?Subject=Hi&Body=`.
+//! - IPv6 references in brackets, `lr`, `transport`, and other parameters.
+//!
+//! Internally we now expose a [`Scheme`] enum for type-safe matching, but
+//! the legacy `scheme(&self) -> &str` accessor is preserved verbatim so
+//! existing call sites continue to compile and existing tests still pass.
 
 use crate::core::SipError;
 use std::fmt;
 
+/// URI scheme as defined in RFC 3261 §19.1 and RFC 3966.
+///
+/// We model the three schemes we actually support directly. Anything
+/// else is rejected at parse time with [`SipError::Parse`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Scheme {
+    /// Plain SIP — RFC 3261 §19.1.
+    Sip,
+    /// Secure SIP (TLS-required) — RFC 3261 §19.1.
+    Sips,
+    /// Telephone URI — RFC 3966.
+    Tel,
+}
+
+impl Scheme {
+    /// Return the canonical lowercase wire form (`"sip"`, `"sips"`, `"tel"`).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Scheme::Sip => "sip",
+            Scheme::Sips => "sips",
+            Scheme::Tel => "tel",
+        }
+    }
+}
+
+impl fmt::Display for Scheme {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// SIP URI wrapper with convenience methods.
+///
+/// Models RFC 3261 §19.1 SIP/SIPS URIs and RFC 3966 `tel:` URIs in a
+/// single struct. For `tel:` URIs `user` is `None`, `host` carries the
+/// phone-number subscriber, and `port` is `None`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SipUri {
-    /// The scheme (sip or sips).
-    scheme: String,
-    /// User part (optional).
+    /// The scheme (sip, sips, or tel).
+    scheme: Scheme,
+    /// User part (optional). Always `None` for `tel:` URIs.
     user: Option<String>,
-    /// Host part (required).
+    /// Host part (required) — the authority for `sip`/`sips`, or the
+    /// phone-number subscriber for `tel`.
     host: String,
-    /// Port (optional).
+    /// Port (optional). Always `None` for `tel:` URIs.
     port: Option<u16>,
-    /// URI parameters (key=value pairs).
+    /// URI parameters (`;key=value` pairs after the host[:port]).
     params: Vec<(String, Option<String>)>,
+    /// URI headers (`?key=value&...` after the parameters). Per RFC 3261
+    /// §19.1.1 these are *not* the same as message headers — they are
+    /// part of the URI itself, used to populate the headers of any
+    /// message constructed from the URI (e.g. `sip:foo@bar?Subject=Hi`).
+    headers: Vec<(String, String)>,
 }
 
 impl SipUri {
     /// Parse a SIP URI from a string.
     ///
     /// Supports formats like:
-    /// - sip:user@host
-    /// - sip:user@host:5060
-    /// - sips:user@host;transport=tcp
-    /// - sip:host;lr
+    /// - `sip:user@host`
+    /// - `sip:user@host:5060`
+    /// - `sips:user@host;transport=tcp`
+    /// - `sip:host;lr`
+    /// - `sip:user@host;param=v?Header1=A&Header2=B`
+    /// - `tel:+1-212-555-1212`
+    /// - `tel:+1-212-555-1212;phone-context=example.com`
     pub fn parse(s: &str) -> Result<Self, SipError> {
         let s = s.trim();
 
-        // Parse scheme
+        // Parse scheme.
         let (scheme, rest) = if let Some(idx) = s.find(':') {
-            let scheme = s[..idx].to_lowercase();
-            if scheme != "sip" && scheme != "sips" {
-                return Err(SipError::Parse(format!(
-                    "Invalid SIP URI scheme: {}",
-                    scheme
-                )));
-            }
+            let scheme_str = s[..idx].to_lowercase();
+            let scheme = match scheme_str.as_str() {
+                "sip" => Scheme::Sip,
+                "sips" => Scheme::Sips,
+                "tel" => Scheme::Tel,
+                _ => {
+                    return Err(SipError::Parse(format!(
+                        "Invalid SIP URI scheme: {}",
+                        scheme_str
+                    )))
+                }
+            };
             (scheme, &s[idx + 1..])
         } else {
             return Err(SipError::Parse("Missing scheme in SIP URI".to_string()));
         };
 
-        // Parse user@host:port;params
+        // Split off URI headers (after `?`).
+        //
+        // RFC 3261 §19.1.1: the `?` introduces URI-headers. They are
+        // separated by `&` and each is `key=value`. We do not attempt
+        // percent-decoding here — values stay as-on-the-wire.
+        let (rest, headers) = if let Some(idx) = rest.find('?') {
+            let (uri_part, header_part) = rest.split_at(idx);
+            let header_part = &header_part[1..]; // skip '?'
+            let mut hs: Vec<(String, String)> = Vec::new();
+            for h in header_part.split('&') {
+                if h.is_empty() {
+                    continue;
+                }
+                if let Some(eq) = h.find('=') {
+                    hs.push((h[..eq].to_string(), h[eq + 1..].to_string()));
+                } else {
+                    // No `=` — store the whole token as a header name
+                    // with an empty value. Lenient by design.
+                    hs.push((h.to_string(), String::new()));
+                }
+            }
+            (uri_part, hs)
+        } else {
+            (rest, Vec::new())
+        };
+
+        // Split off parameters (after first `;`).
         let (user_host_port, params_str) = if let Some(idx) = rest.find(';') {
             (&rest[..idx], Some(&rest[idx + 1..]))
         } else {
             (rest, None)
         };
 
-        // Parse user and host
-        let (user, host_port) = if let Some(idx) = user_host_port.find('@') {
-            (
-                Some(user_host_port[..idx].to_string()),
-                &user_host_port[idx + 1..],
-            )
+        // Resolve user / host / port. `tel:` URIs have no user and no
+        // port — the entire `user_host_port` slice is the phone number.
+        let (user, host, port) = if scheme == Scheme::Tel {
+            (None, user_host_port.to_string(), None)
         } else {
-            (None, user_host_port)
-        };
-
-        // Parse host and port
-        let (host, port) = if host_port.starts_with('[') {
-            // IPv6 address
-            if let Some(bracket_end) = host_port.find(']') {
-                let ipv6_host = host_port[..bracket_end + 1].to_string();
-                let after_bracket = &host_port[bracket_end + 1..];
-                let port = if let Some(port_str) = after_bracket.strip_prefix(':') {
-                    port_str.parse().ok()
-                } else {
-                    None
-                };
-                (ipv6_host, port)
+            // Parse user and host
+            let (user, host_port) = if let Some(idx) = user_host_port.find('@') {
+                (
+                    Some(user_host_port[..idx].to_string()),
+                    &user_host_port[idx + 1..],
+                )
             } else {
-                return Err(SipError::Parse(
-                    "Invalid IPv6 address in SIP URI".to_string(),
-                ));
-            }
-        } else if let Some(idx) = host_port.rfind(':') {
-            let potential_port = &host_port[idx + 1..];
-            if potential_port.chars().all(|c| c.is_ascii_digit()) {
-                (host_port[..idx].to_string(), potential_port.parse().ok())
+                (None, user_host_port)
+            };
+
+            // Parse host and port
+            let (host, port) = if host_port.starts_with('[') {
+                // IPv6 address
+                if let Some(bracket_end) = host_port.find(']') {
+                    let ipv6_host = host_port[..bracket_end + 1].to_string();
+                    let after_bracket = &host_port[bracket_end + 1..];
+                    let port = if let Some(port_str) = after_bracket.strip_prefix(':') {
+                        port_str.parse().ok()
+                    } else {
+                        None
+                    };
+                    (ipv6_host, port)
+                } else {
+                    return Err(SipError::Parse(
+                        "Invalid IPv6 address in SIP URI".to_string(),
+                    ));
+                }
+            } else if let Some(idx) = host_port.rfind(':') {
+                let potential_port = &host_port[idx + 1..];
+                if potential_port.chars().all(|c| c.is_ascii_digit()) {
+                    (host_port[..idx].to_string(), potential_port.parse().ok())
+                } else {
+                    (host_port.to_string(), None)
+                }
             } else {
                 (host_port.to_string(), None)
-            }
-        } else {
-            (host_port.to_string(), None)
+            };
+            (user, host, port)
         };
 
         // Parse parameters
@@ -113,12 +211,20 @@ impl SipUri {
             host,
             port,
             params,
+            headers,
         })
     }
 
-    /// Get the URI scheme ("sip" or "sips").
+    /// Get the URI scheme as its lowercase wire string (`"sip"`,
+    /// `"sips"`, or `"tel"`). Preserved for backward compatibility with
+    /// pre-M3 callers; new code should prefer [`SipUri::scheme_enum`].
     pub fn scheme(&self) -> &str {
-        &self.scheme
+        self.scheme.as_str()
+    }
+
+    /// Get the URI scheme as a typed [`Scheme`] enum.
+    pub fn scheme_enum(&self) -> Scheme {
+        self.scheme
     }
 
     /// Get the user part (if present).
@@ -126,7 +232,8 @@ impl SipUri {
         self.user.as_deref()
     }
 
-    /// Get the host part.
+    /// Get the host part. For a `tel:` URI this is the phone-number
+    /// subscriber; for `sip`/`sips` it is the authority host.
     pub fn host(&self) -> &str {
         &self.host
     }
@@ -137,6 +244,8 @@ impl SipUri {
     }
 
     /// Get the effective port (returns default 5060/5061 if not specified).
+    /// For `tel:` URIs (no port concept) this still returns 5060 to keep
+    /// the contract uniform; callers should gate on the scheme first.
     pub fn effective_port(&self) -> u16 {
         self.port
             .unwrap_or(if self.is_secure() { 5061 } else { 5060 })
@@ -147,9 +256,14 @@ impl SipUri {
         self.get_param("transport")
     }
 
-    /// Check if this is a secure URI (sips:).
+    /// Check if this is a secure URI (`sips:`).
     pub fn is_secure(&self) -> bool {
-        self.scheme == "sips"
+        self.scheme == Scheme::Sips
+    }
+
+    /// Check if this is a `tel:` URI.
+    pub fn is_tel(&self) -> bool {
+        self.scheme == Scheme::Tel
     }
 
     /// Get the user part for routing.
@@ -181,6 +295,35 @@ impl SipUri {
             .any(|(k, _)| k.to_lowercase() == name_lower)
     }
 
+    /// Iterate over all URI parameters in wire order.
+    pub fn params(&self) -> impl Iterator<Item = (&str, Option<&str>)> {
+        self.params.iter().map(|(k, v)| (k.as_str(), v.as_deref()))
+    }
+
+    /// Iterate over all URI headers in wire order.
+    ///
+    /// URI headers (RFC 3261 §19.1.1) are the `?key=value&...` portion
+    /// of a SIP URI — distinct from the headers of a SIP message. They
+    /// are typically used to seed the headers of any message
+    /// constructed from this URI (e.g. `sip:foo@bar?Subject=Hi`).
+    pub fn headers(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.headers.iter().map(|(k, v)| (k.as_str(), v.as_str()))
+    }
+
+    /// Get a URI-header value by name (case-insensitive lookup).
+    pub fn get_header(&self, name: &str) -> Option<&str> {
+        let name_lower = name.to_lowercase();
+        self.headers
+            .iter()
+            .find(|(k, _)| k.to_lowercase() == name_lower)
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// Returns true if any URI headers are attached.
+    pub fn has_headers(&self) -> bool {
+        !self.headers.is_empty()
+    }
+
     /// Check if the lr (loose routing) parameter is present.
     pub fn is_loose_route(&self) -> bool {
         self.has_param("lr")
@@ -194,7 +337,7 @@ impl SipUri {
 
 impl fmt::Display for SipUri {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:", self.scheme)?;
+        write!(f, "{}:", self.scheme.as_str())?;
 
         if let Some(ref user) = self.user {
             write!(f, "{}@", user)?;
@@ -214,6 +357,16 @@ impl fmt::Display for SipUri {
             }
         }
 
+        if !self.headers.is_empty() {
+            f.write_str("?")?;
+            for (i, (k, v)) in self.headers.iter().enumerate() {
+                if i > 0 {
+                    f.write_str("&")?;
+                }
+                write!(f, "{}={}", k, v)?;
+            }
+        }
+
         Ok(())
     }
 }
@@ -221,11 +374,12 @@ impl fmt::Display for SipUri {
 /// Builder for SIP URIs.
 #[derive(Debug, Default)]
 pub struct SipUriBuilder {
-    scheme: Option<String>,
+    scheme: Option<Scheme>,
     user: Option<String>,
     host: Option<String>,
     port: Option<u16>,
     params: Vec<(String, Option<String>)>,
+    headers: Vec<(String, String)>,
 }
 
 impl SipUriBuilder {
@@ -234,9 +388,26 @@ impl SipUriBuilder {
         Self::default()
     }
 
-    /// Set the scheme (defaults to "sip").
+    /// Set the scheme by name (defaults to `"sip"`). Accepts `"sip"`,
+    /// `"sips"`, `"tel"`, case-insensitive. Unknown schemes silently
+    /// fall back to `"sip"` to preserve pre-M3 builder semantics
+    /// (the builder never returned an error before, so we don't
+    /// introduce a new error path here — `build()` validates the host
+    /// presence and that's enough).
     pub fn scheme(mut self, scheme: &str) -> Self {
-        self.scheme = Some(scheme.to_lowercase());
+        let s = scheme.to_lowercase();
+        let scheme_enum = match s.as_str() {
+            "sips" => Scheme::Sips,
+            "tel" => Scheme::Tel,
+            _ => Scheme::Sip,
+        };
+        self.scheme = Some(scheme_enum);
+        self
+    }
+
+    /// Set the scheme directly via the typed enum.
+    pub fn scheme_enum(mut self, scheme: Scheme) -> Self {
+        self.scheme = Some(scheme);
         self
     }
 
@@ -280,6 +451,12 @@ impl SipUriBuilder {
         self.flag("lr")
     }
 
+    /// Append a URI header (`?key=value&...` portion).
+    pub fn header(mut self, key: &str, value: &str) -> Self {
+        self.headers.push((key.to_string(), value.to_string()));
+        self
+    }
+
     /// Build the SipUri.
     pub fn build(self) -> Result<SipUri, SipError> {
         let host = self
@@ -287,11 +464,12 @@ impl SipUriBuilder {
             .ok_or_else(|| SipError::InvalidHeader("Missing host in SIP URI".to_string()))?;
 
         Ok(SipUri {
-            scheme: self.scheme.unwrap_or_else(|| "sip".to_string()),
+            scheme: self.scheme.unwrap_or(Scheme::Sip),
             user: self.user,
             host,
             port: self.port,
             params: self.params,
+            headers: self.headers,
         })
     }
 }
@@ -396,6 +574,7 @@ mod tests {
             .port(5060)
             .transport("udp")
             .loose_route()
+            .header("Subject", "hi")
             .build()
             .unwrap();
 
@@ -690,5 +869,174 @@ mod tests {
             .unwrap();
         assert_eq!(uri.scheme(), "sips");
         assert!(uri.is_secure());
+    }
+
+    // ----- M3 additions: tel scheme, URI headers, Scheme enum, accessors -----
+
+    /// RFC 3966: a bare `tel:` URI parses as `scheme=Tel`, no user, the
+    /// phone-number subscriber in `host`, no port.
+    #[test]
+    fn test_parse_tel_uri_basic() {
+        let uri = SipUri::parse("tel:+1-212-555-1212").unwrap();
+        assert_eq!(uri.scheme(), "tel");
+        assert_eq!(uri.scheme_enum(), Scheme::Tel);
+        assert!(uri.is_tel());
+        assert!(!uri.is_secure());
+        assert_eq!(uri.user(), None);
+        assert_eq!(uri.host(), "+1-212-555-1212");
+        assert_eq!(uri.port(), None);
+    }
+
+    /// `tel:` URIs carry parameters (e.g. `phone-context`); they must
+    /// not be misread as a SIP-style host:port — the colon between `+1`
+    /// and `212` would otherwise be mis-parsed as a port boundary.
+    #[test]
+    fn test_parse_tel_uri_with_params_and_colons() {
+        let uri = SipUri::parse("tel:+1-212-555-1212;phone-context=example.com").unwrap();
+        assert_eq!(uri.scheme(), "tel");
+        assert_eq!(uri.host(), "+1-212-555-1212");
+        assert_eq!(uri.port(), None);
+        assert_eq!(uri.get_param("phone-context"), Some("example.com"));
+    }
+
+    /// A tel-URI without the `+` global indicator is also valid per
+    /// RFC 3966 §5.1.5 (local subscriber). Round-trip via Display.
+    #[test]
+    fn test_tel_uri_round_trip_local() {
+        let uri = SipUri::parse("tel:7042;phone-context=example.com").unwrap();
+        let s = uri.to_string();
+        assert_eq!(s, "tel:7042;phone-context=example.com");
+        let reparsed = SipUri::parse(&s).unwrap();
+        assert_eq!(uri, reparsed);
+    }
+
+    /// URI headers (the `?key=value&...` portion of RFC 3261 §19.1.1)
+    /// are parsed into the `headers` collection and survive Display.
+    #[test]
+    fn test_parse_uri_with_headers() {
+        let uri = SipUri::parse("sip:alice@example.com?Subject=Hi&Body=Hello").unwrap();
+        assert_eq!(uri.user(), Some("alice"));
+        assert_eq!(uri.host(), "example.com");
+        assert_eq!(uri.get_header("Subject"), Some("Hi"));
+        assert_eq!(uri.get_header("body"), Some("Hello")); // case-insensitive
+        assert!(uri.has_headers());
+        let collected: Vec<(&str, &str)> = uri.headers().collect();
+        assert_eq!(collected, vec![("Subject", "Hi"), ("Body", "Hello")]);
+    }
+
+    /// URI with both parameters and headers — must split correctly on
+    /// `;` (params) vs `?` (headers).
+    #[test]
+    fn test_parse_uri_params_and_headers() {
+        let uri =
+            SipUri::parse("sip:alice@example.com:5060;transport=tcp?Subject=Hi&X-Foo=Bar").unwrap();
+        assert_eq!(uri.port(), Some(5060));
+        assert_eq!(uri.transport(), Some("tcp"));
+        assert_eq!(uri.get_header("Subject"), Some("Hi"));
+        assert_eq!(uri.get_header("X-Foo"), Some("Bar"));
+    }
+
+    /// URI headers round-trip via Display — emitted in original order
+    /// with `?` prefix and `&` separators.
+    #[test]
+    fn test_uri_headers_display_round_trip() {
+        let original = "sip:alice@example.com?Subject=Hi&Body=Hello";
+        let uri = SipUri::parse(original).unwrap();
+        assert_eq!(uri.to_string(), original);
+        // Reparse for full structural round-trip.
+        let reparsed = SipUri::parse(&uri.to_string()).unwrap();
+        assert_eq!(uri, reparsed);
+    }
+
+    /// URI header with no `=` is preserved as a name-only token with an
+    /// empty value (lenient parse — real-world inputs occasionally omit
+    /// `=` for boolean-style header markers).
+    #[test]
+    fn test_parse_uri_header_no_equals() {
+        let uri = SipUri::parse("sip:alice@example.com?Foo").unwrap();
+        assert_eq!(uri.get_header("Foo"), Some(""));
+    }
+
+    /// Empty header tokens between `&` separators are silently dropped
+    /// (e.g. `?A=1&&B=2`).
+    #[test]
+    fn test_parse_uri_headers_empty_tokens() {
+        let uri = SipUri::parse("sip:alice@example.com?A=1&&B=2").unwrap();
+        assert_eq!(uri.get_header("A"), Some("1"));
+        assert_eq!(uri.get_header("B"), Some("2"));
+        let count = uri.headers().count();
+        assert_eq!(count, 2);
+    }
+
+    /// Scheme enum exposes typed matching alongside the legacy
+    /// `scheme()` &str accessor — both must agree.
+    #[test]
+    fn test_scheme_enum_variants() {
+        let sip = SipUri::parse("sip:a@b").unwrap();
+        let sips = SipUri::parse("sips:a@b").unwrap();
+        let tel = SipUri::parse("tel:+1234").unwrap();
+
+        assert_eq!(sip.scheme_enum(), Scheme::Sip);
+        assert_eq!(sips.scheme_enum(), Scheme::Sips);
+        assert_eq!(tel.scheme_enum(), Scheme::Tel);
+
+        assert_eq!(Scheme::Sip.as_str(), "sip");
+        assert_eq!(Scheme::Sips.as_str(), "sips");
+        assert_eq!(Scheme::Tel.as_str(), "tel");
+
+        // Display agrees with as_str.
+        assert_eq!(format!("{}", Scheme::Sip), "sip");
+        assert_eq!(format!("{}", Scheme::Sips), "sips");
+        assert_eq!(format!("{}", Scheme::Tel), "tel");
+    }
+
+    /// Builder accepts the typed Scheme enum directly.
+    #[test]
+    fn test_builder_scheme_enum() {
+        let uri = SipUri::builder()
+            .scheme_enum(Scheme::Tel)
+            .host("+12125551212")
+            .build()
+            .unwrap();
+        assert!(uri.is_tel());
+        assert_eq!(uri.to_string(), "tel:+12125551212");
+    }
+
+    /// Unknown scheme strings on the builder fall back to `sip` (the
+    /// builder is total — preserves the pre-M3 contract that
+    /// `.scheme(s).host(h).build()` never errors on a bad scheme).
+    #[test]
+    fn test_builder_unknown_scheme_defaults_to_sip() {
+        let uri = SipUri::builder()
+            .scheme("ftp")
+            .host("example.com")
+            .build()
+            .unwrap();
+        assert_eq!(uri.scheme(), "sip");
+    }
+
+    /// Builder appends URI headers; Display emits them.
+    #[test]
+    fn test_builder_with_headers() {
+        let uri = SipUri::builder()
+            .host("example.com")
+            .header("Subject", "Hi")
+            .header("Body", "Hello")
+            .build()
+            .unwrap();
+        assert!(uri.has_headers());
+        let s = uri.to_string();
+        assert!(s.ends_with("?Subject=Hi&Body=Hello"), "got {}", s);
+    }
+
+    /// Iterating params yields wire order with case preserved.
+    #[test]
+    fn test_params_iterator_preserves_order_and_case() {
+        let uri = SipUri::parse("sip:host;Foo=1;bar;Baz=3").unwrap();
+        let collected: Vec<(&str, Option<&str>)> = uri.params().collect();
+        assert_eq!(
+            collected,
+            vec![("Foo", Some("1")), ("bar", None), ("Baz", Some("3"))]
+        );
     }
 }
