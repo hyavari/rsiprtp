@@ -77,16 +77,35 @@ accepts `SIP/1.x` and other arbitrary `SIP/N.M` versions; RFC 3261
 leading `\r\n` from the body when the wire bytes carry a third CRLF
 immediately after the headers/body separator; RFC 3261 §7.5 says the
 body is exactly the bytes after the separator, so the third CRLF
-*belongs to* the body), and the M11 fuzz finding #13
+*belongs to* the body), the M11 fuzz finding #13
 (`header_missing_colon_rsip_accepts_we_reject` — rsip silently
 absorbs a bare LF, without preceding CR, into the status-line
 Reason-Phrase, consuming the next line's bytes; RFC 3261 §7.2 BNF
 mandates CRLF as the line terminator and excludes LF from the
 Reason-Phrase character set. The "missing ':'" error from our parser
-is the visible proxy for this rsip-side issue.), the running rsip 0.4 spec-deficiency count
-is **12 active distinct types**. All
-are retargeted to direct on-our-parser assertions when rsip is dropped
-from runtime deps at M10.
+is the visible proxy for this rsip-side issue.), and the M11 fuzz
+finding #14
+(`header_section_contains_nul_rsip_rejects_we_accept` — rsip 0.4's
+nom-based tokenizer rejects a NUL byte (`0x00`) in a header value
+with a `Tokenizer error`; RFC 3261 §7.3 does not strictly forbid NUL
+in header values and §25.1 OCTET grammar admits any byte. Our parser
+accepts per the M2-A pinned permissive policy
+(`test_header_with_embedded_nul_pinned_accepted`)), the running rsip 0.4
+spec-deficiency count is **13 active distinct types**. All are retargeted
+to direct on-our-parser assertions when rsip is dropped from runtime
+deps at M10.
+
+The `(Err, Ok)` arm of the fuzz oracle (rsip rejects, we accept) now
+uses a **principled heuristic** rather than per-error-string skips:
+"non-printable byte in the header section (anything outside
+0x09/0x0A/0x0D/0x20-0x7E) AND rsip Tokenizer-class error" is treated
+as documented asymmetry. This catches the broader class of "rsip
+tokenizer narrower than our parser" findings — including future
+high-bit, lone-CR, and other-control-byte mutations the fuzzer may
+discover — without us having to enumerate visible rsip error-message
+wrappings. Findings #12, #13, #14 are the canonical instances; the
+heuristic prevents libfuzzer from rediscovering each variant during
+the campaign. See `parser_diff_oracle::assert_equivalent`.
 
 M11 fuzz finding #12 (status line missing SP after status code) was
 **closed at the framing layer** rather than pinned: per RFC 3261 §7.2

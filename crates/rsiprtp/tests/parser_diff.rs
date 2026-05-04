@@ -492,6 +492,62 @@ fn header_missing_colon_rsip_accepts_we_reject() {
     );
 }
 
+/// M11 fuzz finding #14: a NUL byte (`0x00`) inside a header NAME
+/// token in the header section. rsip 0.4's nom-based tokenizer
+/// rejects it with a `Tokenizer error`; our parser accepts per the
+/// M2-A pinned permissive policy (see
+/// `crates/rsiprtp/src/sip/parser/framing.rs` ::
+/// `test_header_with_embedded_nul_pinned_accepted`). RFC 3261 §7.3
+/// does not strictly forbid NUL in header text, and §25.1 OCTET
+/// grammar admits any byte; the rsip tokenizer is the narrower side
+/// here.
+///
+/// Empirically rsip 0.4 accepts NUL inside a header *value*
+/// (e.g. `Foo: a\0b`), inside the reason phrase, and inside the
+/// body — so this pin uses NUL inside the header *name* token,
+/// which is the position where rsip's tokenizer surfaces the
+/// asymmetry as a `Tokenizer error` divergence (the original fuzz
+/// finding's failing seeds matched this shape).
+///
+/// **Divergence pinned:** ours accepts, rsip rejects. This sits in
+/// the same general category as findings #12 (status-line lenience)
+/// and #13 (bare LF in Reason-Phrase): rsip's tokenizer is narrower
+/// than RFC 3261 / our parser for non-printable bytes in the header
+/// section. The fuzz oracle's `(Err, Ok)` arm now carries a
+/// principled heuristic (any non-printable byte in the header
+/// section combined with a rsip Tokenizer-class error) that catches
+/// this whole category without needing per-error-string skips. See
+/// `parser_diff_oracle::assert_equivalent`. Update this test if
+/// rsip broadens its accepted character set (e.g. moves to a
+/// byte-level OCTET tokenizer).
+#[test]
+fn header_section_contains_nul_rsip_rejects_we_accept() {
+    // RFC 3261 §7.3 doesn't strictly forbid NUL bytes in header
+    // section text; §25.1 OCTET grammar permits any byte. rsip 0.4's
+    // tokenizer is narrower (rejects NUL inside the header NAME
+    // token); we accept per M2-A's documented permissive policy. M11
+    // fuzz finding #14. Update if rsip broadens its accepted
+    // character set.
+    let mut bytes = b"SIP/2.0 200 OK\r\nFo".to_vec();
+    bytes.push(0); // NUL inside header NAME
+    bytes.extend_from_slice(b"o: bar\r\nCall-ID: x\r\nCSeq: 1 INVITE\r\n");
+    bytes.extend_from_slice(b"From: <sip:a>\r\nTo: <sip:b>\r\nVia: SIP/2.0/UDP h\r\n");
+    bytes.extend_from_slice(b"Content-Length: 0\r\n\r\n");
+    let rs = oracle::rsip_to_diff(&bytes);
+    let ours = oracle::ours_to_diff(&bytes);
+    assert!(rs.is_err(), "rsip should reject NUL in header NAME");
+    let rs_err = rs.unwrap_err();
+    assert!(
+        rs_err.contains("Tokenizer error"),
+        "rsip rejection should be Tokenizer-class (the heuristic skip \
+         in parser_diff_oracle keys off this); got: {rs_err}",
+    );
+    assert!(
+        ours.is_ok(),
+        "we accept per OCTET grammar / M2-A permissive policy",
+    );
+}
+
 /// M11 fuzz finding #12, closed: status lines that omit the SP
 /// between Status-Code and Reason-Phrase when the reason is empty
 /// (e.g. `"SIP/2.0 202\r\n"`). RFC 3261 §7.2 BNF
