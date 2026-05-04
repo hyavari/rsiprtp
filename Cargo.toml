@@ -28,8 +28,11 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage)", "cfg(coverage_
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 
-# SIP parsing
-rsip = "0.4"
+# SIP parsing — `rsip` was the runtime parser through 0.3.x. The
+# in-tree parser at `crates/rsiprtp/src/sip/parser/` replaced it in
+# the M1–M9 rewrite (HLD: 2026-05-03). `rsip = "0.4"` now lives only
+# under `[dev-dependencies]` of `crates/rsiprtp` as the differential-
+# test oracle for `tests/parser_diff.rs`.
 
 # Audio codecs
 audio-codec-algorithms = "0.7"

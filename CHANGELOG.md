@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **rsip dependency dropped from runtime deps.** rsip remains in
+  `[dev-dependencies]` indefinitely as the differential-test oracle
+  for `tests/parser_diff.rs`. The library builds and runs without
+  rsip; downstream consumers no longer pull rsip transitively.
 - **`rsiprtp::sip::RsipUri`** re-export of `rsip::Uri`. The wrapper layer
   no longer leaks rsip types across its public boundary.
 - **`SipRequest::inner()`** and **`SipResponse::inner()`** — the

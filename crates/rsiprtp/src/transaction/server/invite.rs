@@ -65,19 +65,28 @@ use std::time::Duration;
 ///
 /// `RSeq` is added unconditionally; the TU is not expected to set one.
 ///
-/// M8 cuts the implementation over to the in-tree parser's
-/// `Headers` collection. The semantics are unchanged from the M7
-/// rsip-backed version.
+/// M8 cut storage to the in-tree parser's `Headers`. M9 dropped the
+/// per-header `.cloned()` (the owned `IntoIterator for Headers` makes
+/// the drain a true move) and consolidated the repeated MAX_HEADERS
+/// pushes through a local helper.
 fn stamp_reliable_headers(response: &mut SipResponse, rseq: u32) -> bytes::Bytes {
     let inner = response.inner_mut();
 
-    // Drain the existing headers so we can rebuild in-order.
-    let existing: Vec<PHeader> = std::mem::take(&mut inner.headers)
-        .into_iter()
-        .cloned()
-        .collect();
+    // Drain the existing headers (true move via `IntoIterator for Headers`)
+    // so we can rebuild in-order without per-header clones.
+    let existing = std::mem::take(&mut inner.headers);
     let mut new_headers = PHeaders::new();
     let mut handled_require = false;
+
+    // Local helper: every push here is bounded above by `original len + 2`
+    // (Require if absent + RSeq), and the original was already a valid
+    // `Headers` under `MAX_HEADERS`. The +2 overflow is purely theoretical
+    // for TU-built responses but we preserve the previous panic-on-bound
+    // semantics.
+    fn push(h: &mut PHeaders, header: PHeader) {
+        h.push(header)
+            .expect("response header count under MAX_HEADERS");
+    }
 
     for header in existing {
         match &header {
@@ -92,9 +101,7 @@ fn stamp_reliable_headers(response: &mut SipResponse, rseq: u32) -> bytes::Bytes
                     continue;
                 }
                 let merged = merge_require_with_100rel(value);
-                new_headers
-                    .push(PHeader::Require(merged))
-                    .expect("response header count under MAX_HEADERS");
+                push(&mut new_headers, PHeader::Require(merged));
                 handled_require = true;
             }
             PHeader::Other(key, value) if key.eq_ignore_ascii_case("Require") => {
@@ -105,22 +112,16 @@ fn stamp_reliable_headers(response: &mut SipResponse, rseq: u32) -> bytes::Bytes
                     continue;
                 }
                 let merged = merge_require_with_100rel(value);
-                new_headers
-                    .push(PHeader::Require(merged))
-                    .expect("response header count under MAX_HEADERS");
+                push(&mut new_headers, PHeader::Require(merged));
                 handled_require = true;
             }
             _ => {
-                new_headers
-                    .push(header)
-                    .expect("response header count under MAX_HEADERS");
+                push(&mut new_headers, header);
             }
         }
     }
     if !handled_require {
-        new_headers
-            .push(PHeader::Require("100rel".to_string()))
-            .expect("response header count under MAX_HEADERS");
+        push(&mut new_headers, PHeader::Require("100rel".to_string()));
     }
 
     // RSeq must not already be present — TU isn't supposed to set it.
@@ -130,9 +131,10 @@ fn stamp_reliable_headers(response: &mut SipResponse, rseq: u32) -> bytes::Bytes
             .any(|h| matches!(h, PHeader::Other(k, _) if k.eq_ignore_ascii_case("RSeq"))),
         "stamp_reliable_headers: RSeq already present on TU-built response"
     );
-    new_headers
-        .push(PHeader::Other("RSeq".to_string(), rseq.to_string()))
-        .expect("response header count under MAX_HEADERS");
+    push(
+        &mut new_headers,
+        PHeader::Other("RSeq".to_string(), rseq.to_string()),
+    );
 
     inner.headers = new_headers;
     response.to_bytes()
@@ -160,8 +162,10 @@ fn merge_require_with_100rel(value: &str) -> String {
 /// M8: parser-side `Headers` is `Vec<Header>`-backed but exposes only
 /// an immutable iter. To rewrite a single entry in place we drain and
 /// rebuild — the cost is O(n) but n is bounded by `MAX_HEADERS` (256).
+/// M9: drain is now a true move (no per-header clone) via owned
+/// `IntoIterator for Headers`.
 fn merge_into_last_require(headers: &mut PHeaders, extra_tags: &[String]) {
-    let drained: Vec<PHeader> = std::mem::take(headers).into_iter().cloned().collect();
+    let drained: Vec<PHeader> = std::mem::take(headers).into_iter().collect();
     let last_require_idx = drained.iter().enumerate().rev().find_map(|(i, h)| {
         if matches!(h, PHeader::Require(_)) {
             Some(i)
@@ -170,6 +174,9 @@ fn merge_into_last_require(headers: &mut PHeaders, extra_tags: &[String]) {
         }
     });
     let mut rebuilt = PHeaders::new();
+    let push = |h: &mut PHeaders, header: PHeader| {
+        h.push(header).expect("rebuilt header count <= original");
+    };
     for (i, header) in drained.into_iter().enumerate() {
         if Some(i) == last_require_idx {
             if let PHeader::Require(value) = &header {
@@ -179,15 +186,11 @@ fn merge_into_last_require(headers: &mut PHeaders, extra_tags: &[String]) {
                         tags.push(tag.clone());
                     }
                 }
-                rebuilt
-                    .push(PHeader::Require(tags.join(", ")))
-                    .expect("rebuilt header count <= original");
+                push(&mut rebuilt, PHeader::Require(tags.join(", ")));
                 continue;
             }
         }
-        rebuilt
-            .push(header)
-            .expect("rebuilt header count <= original");
+        push(&mut rebuilt, header);
     }
     *headers = rebuilt;
 }

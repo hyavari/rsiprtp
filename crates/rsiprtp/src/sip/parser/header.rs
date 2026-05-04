@@ -359,6 +359,20 @@ impl<'a> IntoIterator for &'a Headers {
     }
 }
 
+impl IntoIterator for Headers {
+    type Item = Header;
+    type IntoIter = std::vec::IntoIter<Header>;
+
+    /// Consume the collection and yield owned `Header`s in insertion
+    /// order. Used by callers (e.g. `transaction::server::invite::
+    /// stamp_reliable_headers`) that drain-and-rebuild a `Headers`
+    /// collection without paying the per-header `clone()` cost that
+    /// the borrowing `&Headers: IntoIterator` impl would force.
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner.into_iter()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

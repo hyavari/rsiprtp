@@ -29,8 +29,9 @@ workspace = true
 default = []
 
 [dependencies]
-# SIP parsing
-rsip.workspace = true
+# SIP parsing — in-tree under `src/sip/parser/`, no third-party SIP
+# parser dependency. `rsip` lives under `[dev-dependencies]` as the
+# differential-test oracle.
 
 # Error handling
 thiserror.workspace = true
@@ -85,6 +86,10 @@ serde_json.workspace = true
 # auth round-trips against rsiprtp's own helper.
 md5.workspace = true
 hex.workspace = true
+# Differential-test oracle for `tests/parser_diff.rs`. Pinned to 0.4
+# (matching the previous runtime version) so the diff harness keeps
+# pinning the same set of rsip 0.4 spec deficiencies.
+rsip = "0.4"
 
 [[example]]
 name = "basic_call"
