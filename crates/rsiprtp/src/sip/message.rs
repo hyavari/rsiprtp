@@ -338,7 +338,7 @@ impl SipRequest {
     pub fn contact_uri(&self) -> Option<SipUri> {
         let value = self.inner.headers.get_first("Contact").map(|h| h.value())?;
         match PContact::parse(value).ok()? {
-            PContact::Wildcard => None,
+            PContact::Wildcard { .. } => None,
             PContact::Addr(addr) => Some(addr.uri),
         }
     }
@@ -576,7 +576,7 @@ impl SipResponse {
     pub fn contact_uri(&self) -> Option<SipUri> {
         let value = self.inner.headers.get_first("Contact").map(|h| h.value())?;
         match PContact::parse(value).ok()? {
-            PContact::Wildcard => None,
+            PContact::Wildcard { .. } => None,
             PContact::Addr(addr) => Some(addr.uri),
         }
     }

@@ -827,7 +827,11 @@ pub fn rsip_contact_diff(value: &str) -> Result<DiffContact, String> {
 pub fn ours_contact_diff(value: &str) -> Result<DiffContact, String> {
     let c = OurContact::parse(value).map_err(|e| format!("ours Contact: {e}"))?;
     match c {
-        OurContact::Wildcard => Ok(DiffContact::Wildcard),
+        // M5 backlog: wildcard now carries optional params
+        // (`*;expires=0`). The diff harness still maps both forms
+        // to `DiffContact::Wildcard` because rsip's typed Contact
+        // doesn't model the wildcard at all.
+        OurContact::Wildcard { .. } => Ok(DiffContact::Wildcard),
         OurContact::Addr(a) => Ok(DiffContact::Addr(DiffNameAddr {
             display_name: a.display_name.clone(),
             uri: NormalizedUri::from_str(&a.uri.to_string()),

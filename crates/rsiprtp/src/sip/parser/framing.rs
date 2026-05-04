@@ -11,6 +11,14 @@ use crate::core::SipError;
 use crate::sip::uri::SipUri;
 use std::str::FromStr;
 
+/// Maximum number of fold-continuation lines (RFC 3261 §7.3.1) we
+/// accept on a single logical header. The post-fold *length* is
+/// already capped indirectly via `MAX_HEADER_VALUE_LEN +
+/// MAX_START_LINE_LEN`, but a header with 1000 single-byte fold
+/// lines accumulates many small allocations along the way.
+/// Pre-M11 fuzz-prep DoS hardening.
+pub const MAX_FOLD_LINES_PER_HEADER: usize = 32;
+
 /// Split a SIP message into start line, header block, and body.
 ///
 /// The separator is `\r\n\r\n` per RFC 3261. We tolerate `\n\n` for
@@ -87,6 +95,7 @@ fn split_first_line(head: &str) -> (&str, &str) {
 pub fn parse_header_block(block: &str) -> Result<Headers, SipError> {
     let mut headers = Headers::new();
     let mut current: Option<String> = None;
+    let mut fold_lines_for_current: usize = 0;
 
     for raw_line in split_lines(block) {
         // Skip a trailing empty line (the block may end on a newline).
@@ -102,6 +111,16 @@ pub fn parse_header_block(block: &str) -> Result<Headers, SipError> {
                     "fold continuation with no preceding header line: {raw_line:?}",
                 ))
             })?;
+            fold_lines_for_current += 1;
+            if fold_lines_for_current > MAX_FOLD_LINES_PER_HEADER {
+                // Defense-in-depth: a header with thousands of
+                // single-byte fold lines accumulates many small
+                // allocations even when the post-fold length stays
+                // within bounds.
+                return Err(SipError::InvalidHeader(format!(
+                    "header has more than {MAX_FOLD_LINES_PER_HEADER} fold lines",
+                )));
+            }
             folded.push(' ');
             folded.push_str(raw_line.trim());
             if folded.len() > MAX_HEADER_VALUE_LEN.saturating_add(MAX_START_LINE_LEN) {
@@ -120,6 +139,7 @@ pub fn parse_header_block(block: &str) -> Result<Headers, SipError> {
             headers.push(header)?;
         }
         current = Some(raw_line.to_string());
+        fold_lines_for_current = 0;
     }
 
     // Flush the last buffered line.
@@ -487,5 +507,99 @@ mod tests {
     fn test_request_version_garbage_rejected() {
         let line = "INVITE sip:bob@x SIP/garbage";
         assert!(parse_request_line(line).is_err());
+    }
+
+    /// Per-header fold-count cap (RFC 3261 §7.3.1) — 33 fold
+    /// continuation lines is one over the limit and must be
+    /// rejected. Pre-M11 fuzz-prep DoS hardening.
+    #[test]
+    fn test_fold_count_cap_rejects() {
+        let mut block = String::from("Subject: x");
+        for _ in 0..(MAX_FOLD_LINES_PER_HEADER + 1) {
+            block.push_str("\r\n y");
+        }
+        block.push_str("\r\n");
+        let err = parse_header_block(&block).unwrap_err();
+        match err {
+            SipError::InvalidHeader(msg) => {
+                assert!(msg.contains("fold lines"), "got: {msg}");
+            }
+            other => panic!("expected InvalidHeader, got {other:?}"),
+        }
+    }
+
+    /// Exactly `MAX_FOLD_LINES_PER_HEADER` fold lines is at the
+    /// boundary and must be accepted (cap is "more than").
+    #[test]
+    fn test_fold_count_at_limit_accepts() {
+        let mut block = String::from("Subject: x");
+        for _ in 0..MAX_FOLD_LINES_PER_HEADER {
+            block.push_str("\r\n y");
+        }
+        block.push_str("\r\n");
+        let hs = parse_header_block(&block).unwrap();
+        assert_eq!(hs.len(), 1);
+        let v = hs.get_first_value("Subject").unwrap();
+        // Each fold appends " y", so the value is "x" + " y" * 32.
+        let expected = "x".to_string() + &" y".repeat(MAX_FOLD_LINES_PER_HEADER);
+        assert_eq!(v, expected);
+    }
+
+    /// Adversarial micro-test: empty input. Must be rejected (no
+    /// header/body separator). Pre-M11 fuzz-prep behavior pin.
+    #[test]
+    fn test_empty_input_rejects() {
+        let err = split_message(b"").unwrap_err();
+        assert!(matches!(err, SipError::Parse(_)));
+    }
+
+    /// Adversarial micro-test: single byte. Must be rejected (no
+    /// separator, certainly no valid start line). Pre-M11 fuzz-prep
+    /// behavior pin.
+    #[test]
+    fn test_single_byte_input_rejects() {
+        let err = split_message(b"X").unwrap_err();
+        assert!(matches!(err, SipError::Parse(_)));
+    }
+
+    /// Adversarial micro-test: only the CRLFCRLF separator.
+    /// `split_message` finds the separator at offset 0 — start
+    /// line is empty, header block is empty, body is empty. Then
+    /// downstream `parse_request_line` / `parse_status_line`
+    /// reject the empty start line. Pre-M11 fuzz-prep behavior
+    /// pin: confirm the layered rejection is in place.
+    #[test]
+    fn test_only_crlf_rejects() {
+        let res = split_message(b"\r\n\r\n");
+        // split_message itself accepts (separator at offset 0).
+        assert!(res.is_ok(), "split_message accepts \\r\\n\\r\\n");
+        let (start, _hdr, _body) = res.unwrap();
+        assert!(start.is_empty(), "start line is empty");
+        // Both downstream start-line parsers reject empty input.
+        assert!(parse_request_line(start).is_err());
+        assert!(parse_status_line(start).is_err());
+    }
+
+    /// Adversarial micro-test: header value with embedded NUL
+    /// byte. The framer treats the header section as UTF-8; NUL
+    /// (0x00) IS valid UTF-8 (a one-byte code point) and IS
+    /// preserved by `str::lines()`. Documented behavior: accepted
+    /// at framing, value carries the NUL through to typed
+    /// parsers. Pre-M11 fuzz-prep behavior pin so a future
+    /// stricter rejection is a deliberate change. Defense in depth
+    /// (e.g. rejection of non-printable bytes) belongs in a
+    /// future hardening pass with an explicit RFC 3261 §25.1
+    /// `LWS / TEXT-UTF8 / token` allowlist.
+    #[test]
+    fn test_header_with_embedded_nul_pinned_accepted() {
+        let msg = b"INVITE sip:a@b SIP/2.0\r\nFoo: ba\0r\r\n\r\n";
+        let (start, hdr_block, body) = split_message(msg).unwrap();
+        assert_eq!(start, "INVITE sip:a@b SIP/2.0");
+        assert_eq!(body, b"");
+        // The header block contains the literal NUL byte. Header
+        // parsing also accepts it today.
+        let hs = parse_header_block(hdr_block).unwrap();
+        let v = hs.get_first_value("Foo").unwrap();
+        assert_eq!(v.as_bytes(), b"ba\0r");
     }
 }

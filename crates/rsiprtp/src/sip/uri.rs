@@ -22,6 +22,19 @@
 use crate::core::SipError;
 use std::fmt;
 
+/// Maximum number of URI headers (`?key=value&...`) we accept on a
+/// single SIP URI. RFC 3261 §19.1.1 places no formal cap; this is a
+/// defense-in-depth limit so a 1.4 MB URI with 100K headers cannot
+/// drive O(n) allocation/sort cost in [`SipUri::parse`] and
+/// downstream comparators. Pre-M11 fuzz-prep hardening — chosen
+/// generously above any realistic real-world use of URI headers.
+const MAX_URI_HEADERS: usize = 32;
+
+/// Maximum byte length of a single URI-header value. Mirrors
+/// [`MAX_URI_HEADERS`] in intent — a single 1 MB value is no less
+/// abusive than 100K small ones. Pre-M11 fuzz-prep hardening.
+const MAX_URI_HEADER_VALUE_LEN: usize = 256;
+
 /// URI scheme as defined in RFC 3261 §19.1 and RFC 3966.
 ///
 /// We model the three schemes we actually support directly. Anything
@@ -124,13 +137,20 @@ impl SipUri {
                 if h.is_empty() {
                     continue;
                 }
-                if let Some(eq) = h.find('=') {
-                    hs.push((h[..eq].to_string(), h[eq + 1..].to_string()));
+                if hs.len() >= MAX_URI_HEADERS {
+                    return Err(SipError::Parse("too many URI headers".to_string()));
+                }
+                let (k, v) = if let Some(eq) = h.find('=') {
+                    (h[..eq].to_string(), h[eq + 1..].to_string())
                 } else {
                     // No `=` — store the whole token as a header name
                     // with an empty value. Lenient by design.
-                    hs.push((h.to_string(), String::new()));
+                    (h.to_string(), String::new())
+                };
+                if v.len() > MAX_URI_HEADER_VALUE_LEN {
+                    return Err(SipError::Parse("URI header value too long".to_string()));
                 }
+                hs.push((k, v));
             }
             (uri_part, hs)
         } else {
@@ -1093,6 +1113,43 @@ mod tests {
         assert!(uri.has_headers());
         let s = uri.to_string();
         assert!(s.ends_with("?Subject=Hi&Body=Hello"), "got {}", s);
+    }
+
+    /// URI headers count cap: a URI with more than `MAX_URI_HEADERS`
+    /// (32) `?...&...` headers is rejected. Pre-M11 fuzz-prep DoS
+    /// hardening (1.4 MB URI with 100K headers no longer parseable).
+    #[test]
+    fn test_uri_headers_count_cap_rejects() {
+        let mut s = String::from("sip:alice@example.com?");
+        for i in 0..33 {
+            if i > 0 {
+                s.push('&');
+            }
+            s.push_str(&format!("h{i}=v"));
+        }
+        let err = SipUri::parse(&s).unwrap_err();
+        match err {
+            SipError::Parse(msg) => {
+                assert!(msg.contains("too many URI headers"), "got: {msg}");
+            }
+            other => panic!("expected Parse error, got {other:?}"),
+        }
+    }
+
+    /// URI header *value* length cap: a single header value longer
+    /// than `MAX_URI_HEADER_VALUE_LEN` (256 bytes) is rejected.
+    /// Pre-M11 fuzz-prep DoS hardening.
+    #[test]
+    fn test_uri_headers_value_length_cap_rejects() {
+        let big = "x".repeat(257);
+        let s = format!("sip:alice@example.com?Subject={big}");
+        let err = SipUri::parse(&s).unwrap_err();
+        match err {
+            SipError::Parse(msg) => {
+                assert!(msg.contains("URI header value too long"), "got: {msg}");
+            }
+            other => panic!("expected Parse error, got {other:?}"),
+        }
     }
 
     /// Iterating params yields wire order with case preserved.

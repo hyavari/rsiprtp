@@ -739,6 +739,41 @@ fn typed_contact_wildcard_handled_on_both_sides() {
     assert!(matches!(r, DiffContact::Wildcard));
 }
 
+/// RFC 3261 §10.2.2 permits `Contact: *;expires=0` (wildcard with
+/// parameters — the canonical REGISTER unbinding shape). Our
+/// parser accepts and exposes `expires() == Some(0)` on a
+/// typed `Wildcard { params: [...] }` variant. rsip 0.4 does NOT
+/// model the wildcard at the typed level — instead it parses the
+/// `*` as a literal `Domain("*")` host of an addr-spec URI, then
+/// attaches the params to that fake addr. Both parsers "accept",
+/// but the structural shape diverges. Pinned 9th rsip-side
+/// deficiency: if rsip 0.4 is fixed to recognize the wildcard
+/// shape (either as a dedicated typed variant or as a parse
+/// rejection that defers to untyped), this assertion fires.
+#[test]
+fn typed_contact_wildcard_with_params_rsip_misclassifies() {
+    use rsip::headers::untyped::{ToTypedHeader, UntypedHeader};
+    let v = "*;expires=0";
+    // Ours: wildcard variant with expires=0 in params.
+    let ours = ours_contact_diff(v).unwrap();
+    assert!(
+        matches!(ours, DiffContact::Wildcard),
+        "ours produced non-wildcard for `*;expires=0`: {ours:?}",
+    );
+    // rsip: typed-Contact accepts but classifies the `*` as a
+    // domain-host. Verify that misclassification persists in 0.4
+    // so a future rsip fix fires this pin.
+    let untyped = rsip::headers::Contact::new(v);
+    let rsip_typed = untyped.typed().expect("rsip 0.4 accepts `*;expires=0`");
+    let rsip_host = rsip_typed.uri.host_with_port.host.to_string();
+    assert_eq!(
+        rsip_host, "*",
+        "rsip 0.4 unexpectedly stopped misclassifying `*` as a Domain host: \
+         host now = {rsip_host:?}; the wildcard-with-params divergence may be \
+         fixed and this pin can be retired",
+    );
+}
+
 #[test]
 fn typed_contact_with_quoted_display_normalizes() {
     let v = r#""Alice" <sip:alice@example.com>;expires=300;q=0.7"#;
