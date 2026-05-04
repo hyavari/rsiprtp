@@ -72,13 +72,19 @@ misclassifies the `*` as a `Domain` host of an addr-spec), the M11
 fuzz finding #10
 (`typed_status_line_sip1_x_version_rsip_accepts_we_reject` — rsip
 accepts `SIP/1.x` and other arbitrary `SIP/N.M` versions; RFC 3261
-§7.1 mandates exactly `SIP/2.0`), and the M11 fuzz finding #11
+§7.1 mandates exactly `SIP/2.0`), the M11 fuzz finding #11
 (`body_leading_crlf_rsip_strips_we_preserve` — rsip silently strips a
 leading `\r\n` from the body when the wire bytes carry a third CRLF
 immediately after the headers/body separator; RFC 3261 §7.5 says the
 body is exactly the bytes after the separator, so the third CRLF
-*belongs to* the body), the running rsip 0.4 spec-deficiency count
-is **11 active distinct types**. All
+*belongs to* the body), and the M11 fuzz finding #13
+(`header_missing_colon_rsip_accepts_we_reject` — rsip silently
+absorbs a bare LF, without preceding CR, into the status-line
+Reason-Phrase, consuming the next line's bytes; RFC 3261 §7.2 BNF
+mandates CRLF as the line terminator and excludes LF from the
+Reason-Phrase character set. The "missing ':'" error from our parser
+is the visible proxy for this rsip-side issue.), the running rsip 0.4 spec-deficiency count
+is **12 active distinct types**. All
 are retargeted to direct on-our-parser assertions when rsip is dropped
 from runtime deps at M10.
 

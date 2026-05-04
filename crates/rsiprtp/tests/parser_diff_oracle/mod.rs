@@ -1081,6 +1081,17 @@ pub fn assert_equivalent(bytes: &[u8]) {
             //    non-SIP/SIPS/TEL Request-URIs to keep
             //    `SipRequest::uri()` panic-free. Pin:
             //    `diff_request_line_with_non_sip_uri_rsip_accepts_we_reject`.
+            // 4. Bare LF in status-line Reason-Phrase: rsip 0.4 silently
+            //    absorbs a bare LF (without preceding CR) into the reason
+            //    phrase, consuming the following line's bytes as part of
+            //    the reason. RFC 3261 §7.2 BNF mandates CRLF as the line
+            //    terminator and excludes LF from the Reason-Phrase
+            //    character set. Our parser correctly recognizes the line
+            //    terminator and surfaces the next line as a malformed
+            //    header (`missing ':'`). The "missing ':'" string in our
+            //    error is the proxy for this rsip-side issue. Pin:
+            //    `header_missing_colon_rsip_accepts_we_reject` (M11 fuzz
+            //    finding #13).
             //
             // None of these are genuine divergences for fuzz purposes.
             // When rsip is dropped from runtime deps at M10, this skip
@@ -1089,6 +1100,7 @@ pub fn assert_equivalent(bytes: &[u8]) {
             if msg.contains("invalid SIP version")
                 || msg.contains("status code out of range")
                 || msg.contains("invalid Request-URI")
+                || msg.contains("missing ':'")
             {
                 return;
             }

@@ -448,6 +448,50 @@ fn body_leading_crlf_rsip_strips_we_preserve() {
     );
 }
 
+/// M11 fuzz finding #13: rsip 0.4 silently swallows a bare LF
+/// (without preceding CR) inside the Reason-Phrase, consuming
+/// arbitrary text on the following line as part of the reason. RFC
+/// 3261 §7.2 BNF mandates `Status-Line = SIP-Version SP Status-Code
+/// SP Reason-Phrase CRLF` and `Reason-Phrase = *(reserved /
+/// unreserved / escaped / UTF8-NONASCII / UTF8-CONT / SP / HTAB)` —
+/// explicitly **not** including LF. The line terminator is CRLF
+/// only.
+///
+/// On a wire input like `b"SIP/2.0 202 \nNotAHeader\r\n\r\n\xac "`,
+/// rsip frames it as `Response { status: 202, reason: "\nNotAHeader",
+/// headers: [], body: [0xAC, 0x20] }` — silently absorbing the bare
+/// LF + bogus header text into the reason phrase. Our parser
+/// correctly rejects: it recognizes the bare LF (or CRLF after the
+/// trailing SP) as the end of the status line and then sees
+/// `NotAHeader` as a malformed header line, surfacing
+/// `Invalid header: missing ':' in header: NotAHeader`.
+///
+/// **Divergence pinned:** rsip accepts, ours rejects. The visible
+/// "missing ':'" error from our parser is downstream of the real
+/// rsip-side issue (bare-LF-as-part-of-reason). The fuzz oracle's
+/// `(Ok, Err)` arm carries a `"missing ':'"` skip (see
+/// `parser_diff_oracle::assert_equivalent`) to keep libfuzzer from
+/// rediscovering variants of this every run. Update this test if
+/// rsip stops absorbing bare LFs into the reason phrase.
+#[test]
+fn header_missing_colon_rsip_accepts_we_reject() {
+    // The bare LF before "NotAHeader" is the trigger: rsip 0.4 eats
+    // it as part of the reason phrase, our parser correctly treats
+    // CR/LF as the line terminator per RFC 3261 §7.2. M11 fuzz
+    // finding #13. Update this test if rsip stops swallowing bare
+    // LFs in the status line.
+    let bytes = b"SIP/2.0 202 \nNotAHeader\r\n\r\n\xac ";
+    let rs = oracle::rsip_to_diff(bytes);
+    let ours = oracle::ours_to_diff(bytes);
+    assert!(rs.is_ok(), "rsip should accept (its real behavior)");
+    let err = ours.expect_err("ours should reject");
+    assert!(
+        err.contains("missing ':'"),
+        "ours error should mention missing colon (proxy for the \
+         bare-LF-into-reason rsip bug); got: {err}",
+    );
+}
+
 /// M11 fuzz finding #12, closed: status lines that omit the SP
 /// between Status-Code and Reason-Phrase when the reason is empty
 /// (e.g. `"SIP/2.0 202\r\n"`). RFC 3261 §7.2 BNF
