@@ -68,14 +68,24 @@ Combined with the pre-M6 pins (`diff_handcrafted_invite_folded_subject`,
 (`typed_contact_wildcard_with_params_rsip_misclassifies` — RFC 3261
 §10.2.2 `Contact: *;expires=0` is the canonical REGISTER unbinding
 shape; our parser produces a typed `Wildcard { params }`, rsip 0.4
-misclassifies the `*` as a `Domain` host of an addr-spec), and the
-M11 fuzz finding #10
+misclassifies the `*` as a `Domain` host of an addr-spec), the M11
+fuzz finding #10
 (`typed_status_line_sip1_x_version_rsip_accepts_we_reject` — rsip
 accepts `SIP/1.x` and other arbitrary `SIP/N.M` versions; RFC 3261
-§7.1 mandates exactly `SIP/2.0`), the running rsip 0.4
-spec-deficiency count is **10 distinct types**. All are retargeted
-to direct on-our-parser assertions when rsip is dropped from runtime
-deps at M10.
+§7.1 mandates exactly `SIP/2.0`), the M11 fuzz finding #11
+(`body_leading_crlf_rsip_strips_we_preserve` — rsip silently strips a
+leading `\r\n` from the body when the wire bytes carry a third CRLF
+immediately after the headers/body separator; RFC 3261 §7.5 says the
+body is exactly the bytes after the separator, so the third CRLF
+*belongs to* the body), and the M11 fuzz finding #12
+(`status_line_no_reason_sp_rsip_rejects_we_accept` — rsip's
+status-code tokenizer requires a literal SP after the 3-digit code
+even when the reason phrase is empty; real-world stacks frequently
+emit `SIP/2.0 200\r\n` with no trailing SP and our parser stays
+lenient on this shape), the running rsip 0.4 spec-deficiency count
+is **12 distinct types**. All
+are retargeted to direct on-our-parser assertions when rsip is dropped
+from runtime deps at M10.
 
 ## Parser bug fixed in this milestone
 

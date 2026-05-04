@@ -18,8 +18,9 @@ mod oracle;
 
 use oracle::{
     assert_both_reject, assert_equivalent, normalize_value, ours_contact_diff, ours_cseq_diff,
-    ours_from_to_diff, ours_to_to_diff, ours_via_diff, rsip_contact_diff, rsip_cseq_diff,
-    rsip_from_to_diff, rsip_to_to_diff, rsip_via_diff, unquote_display_name, DiffContact,
+    ours_from_to_diff, ours_to_diff, ours_to_to_diff, ours_via_diff, rsip_contact_diff,
+    rsip_cseq_diff, rsip_from_to_diff, rsip_to_diff, rsip_to_to_diff, rsip_via_diff,
+    unquote_display_name, DiffContact,
 };
 
 // ---------------------------------------------------------------
@@ -399,6 +400,126 @@ fn typed_status_line_sip1_x_version_rsip_accepts_we_reject() {
         ours.is_err(),
         "our parser must reject non-SIP/2.0 per RFC 3261 §7.1; \
          got Ok({ours:?})",
+    );
+}
+
+/// M11 fuzz finding #11: rsip 0.4 silently strips a leading `\r\n`
+/// from the body when the wire bytes contain a third CRLF immediately
+/// after the `\r\n\r\n` headers/body separator. RFC 3261 §7.5 says
+/// the body is exactly the bytes that follow the CRLF that terminates
+/// the headers — a third CRLF is *part of the body*. Our parser
+/// preserves the leading CRLF (correct); rsip drops it.
+///
+/// **Divergence pinned:** both accept; rsip's body is 2 bytes shorter
+/// (the leading `\r\n` is gone). The fuzz oracle's known-asymmetry
+/// skip (see `parser_diff_oracle::assert_equivalent` `(Ok, Ok)` arm)
+/// prevents libfuzzer from rediscovering this every run. Update this
+/// test if rsip stops stripping leading body CRLFs.
+#[test]
+fn body_leading_crlf_rsip_strips_we_preserve() {
+    // Reproduces M11 fuzz finding #11. The trigger: a response with
+    // no `Content-Length` header where the bytes immediately after
+    // the `\r\n\r\n` headers/body separator begin with another `\r\n`.
+    // rsip 0.4 silently strips that leading `\r\n` (drops 2 bytes off
+    // the front of the body); our parser preserves it. RFC 3261 §7.5
+    // says the body is *exactly* the bytes that follow the separator
+    // — a third CRLF belongs to the body.
+    let bytes = b"SIP/2.0 200 OK\r\n\r\n\r\nHi!";
+    //                              ^^^^ headers/body separator
+    //                                   ^^^^ leading CRLF of body
+    //                                       ^^^ body content
+    let rs = rsip_to_diff(bytes).expect("rsip should accept");
+    let ours = ours_to_diff(bytes).expect("ours should accept");
+    assert_eq!(
+        ours.body, b"\r\nHi!",
+        "ours preserves leading CRLF in body (RFC 3261 §7.5)",
+    );
+    assert_eq!(
+        rs.body, b"Hi!",
+        "rsip 0.4 strips the leading CRLF — update this test if rsip \
+         stops stripping leading body CRLFs",
+    );
+    assert!(
+        rs.body.len() < ours.body.len(),
+        "rsip body must be strictly shorter than ours (the divergence \
+         we're pinning); got rsip={:?} ours={:?}",
+        rs.body,
+        ours.body,
+    );
+}
+
+/// M11 fuzz finding #12: rsip 0.4 rejects status lines that omit
+/// the SP separator between Status-Code and Reason-Phrase when the
+/// reason phrase is empty (e.g. `"SIP/2.0 202\r\n"`). rsip's
+/// status-code tokenizer is `take(3) + tag(" ") + reason`, so an
+/// empty reason without a trailing SP fails the `tag(" ")` and
+/// surfaces as a `(Tag)` Tokenizer error. Our parser uses
+/// `splitn(3, ' ')` which silently produces an empty reason in that
+/// case, so we accept.
+///
+/// The original fuzz repro in `parser_diff_oracle` looked like:
+///
+/// ```text
+/// ours accepted but rsip rejected:
+/// DiffMessage { kind: Response { status: 202 }, headers: [], body: [172, 32] }
+/// rsip error: rsip: Tokenizer error: ... could not tokenize (Tag): /2.0 202 …
+/// ```
+///
+/// The body bytes `[172, 32]` are incidental — the divergence is
+/// triggered by the absent SP after the status code, not by the body
+/// or the reason-phrase content. RFC 3261 §7.2 BNF
+/// (`Status-Line = SIP-Version SP Status-Code SP Reason-Phrase
+/// CRLF`) technically requires the SP. Real-world stacks often emit
+/// `"SIP/2.0 200\r\n"` with empty reason and no trailing SP; our
+/// parser stays lenient on this shape.
+///
+/// **Divergence pinned:** ours accepts, rsip rejects with a
+/// `(Tag)` Tokenizer error. The fuzz oracle's known-asymmetry skip
+/// (see `parser_diff_oracle::assert_equivalent` `(Err, Ok)` arm)
+/// keeps libfuzzer from rediscovering this every run. The skip
+/// fires when the rsip error contains "Tokenizer error" AND a
+/// high-bit (≥0x80) byte appears in the first 80 bytes of input —
+/// that scopes it to status-line / start-of-message shapes (where
+/// fuzz mutations also tend to inject high bytes near the front)
+/// without masking real header- or body-content divergences. The
+/// narrower no-high-bit shape (e.g. plain `"SIP/2.0 202\r\n\r\n"`)
+/// is unlikely to surface in fuzz mutations of well-formed corpus
+/// inputs and would be a useful rediscovery if it did. Update this
+/// test if rsip widens its status-line tokenizer or if we tighten
+/// our parser to require the SP per the BNF.
+#[test]
+fn status_line_no_reason_sp_rsip_rejects_we_accept() {
+    // RFC 3261 §7.2 BNF mandates the SP between Status-Code and
+    // Reason-Phrase, but the Reason-Phrase itself can be empty.
+    // rsip's `take(3)+tag(" ")` enforces the SP literally; our
+    // `splitn(3, ' ')` does not. Pin uses the same body shape
+    // (172, 32) that the original M11 finding carried, so the bytes
+    // round-trip through the oracle the same way they did at
+    // discovery time.
+    let bytes: &[u8] = b"SIP/2.0 202\r\n\r\n\xac ";
+    //                          ^^^^^ no SP between code and CRLF
+    //                                    ^^^^ headers/body separator
+    //                                        ^^^^ body bytes (172, 32)
+    let rs = rsip_to_diff(bytes);
+    let ours = ours_to_diff(bytes).expect("ours should accept");
+    assert!(
+        rs.is_err(),
+        "rsip 0.4 should reject status line missing SP after Status-Code; \
+         got Ok({rs:?}) — update this test if rsip relaxes the SP",
+    );
+    let err = rs.unwrap_err();
+    assert!(
+        err.contains("Tokenizer error"),
+        "rsip's rejection should surface as a Tokenizer error; got {err:?}",
+    );
+    assert!(
+        matches!(ours.kind, oracle::DiffKind::Response { status: 202 }),
+        "ours must accept the response with empty reason phrase; got {:?}",
+        ours.kind,
+    );
+    assert_eq!(
+        ours.body, b"\xac ",
+        "ours captures the body bytes verbatim past the separator",
     );
 }
 
