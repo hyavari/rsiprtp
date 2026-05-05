@@ -362,6 +362,7 @@ fn request_options_with_explicit_max_forwards_and_tcp_via() {
         .max_forwards(15)
         .build()
         .unwrap();
+    let built = req.to_bytes();
     let r = roundtrip_request(req);
     assert_eq!(r.method(), Method::Options);
     assert_eq!(r.cseq_method().unwrap(), Method::Options);
@@ -378,7 +379,7 @@ fn request_options_with_explicit_max_forwards_and_tcp_via() {
         "expected port 5061 in Via, got: {}",
         vias[0],
     );
-    let wire = String::from_utf8_lossy(&r.to_bytes()).to_string();
+    let wire = String::from_utf8_lossy(&built).to_string();
     assert!(
         wire.contains("Max-Forwards: 15"),
         "expected Max-Forwards: 15 in wire form:\n{wire}",
