@@ -10,8 +10,8 @@
 //! See `wrk_docs/2026.05.05 - HLD - Builder typed round-trip oracle.md`.
 
 use rsiprtp::sip::{
-    Method, MinSe, RAck, Refresher, Require, SessionExpires, SipMessage, SipRequest, SipResponse,
-    Supported,
+    Method, MinSe, RAck, RSeq, Refresher, Require, SessionExpires, SipMessage, SipRequest,
+    SipResponse, Supported,
 };
 
 // -----------------------------------------------------------------
@@ -76,7 +76,10 @@ fn request_invite_minimal() {
 #[test]
 fn request_invite_with_display_name() {
     // No typed accessor for display name; assertion is byte-level on the
-    // wire form. See HLD "What the oracle will not catch".
+    // *built* wire form (not the reparsed bytes). Asserting on
+    // `r.to_bytes()` would test parser stability, not builder emission —
+    // the very bug this oracle is meant to catch. See HLD "What the
+    // oracle will not catch".
     let req = SipRequest::builder()
         .method(Method::Invite)
         .uri("sip:bob@example.com")
@@ -88,12 +91,12 @@ fn request_invite_with_display_name() {
         .cseq(1)
         .build()
         .unwrap();
+    let built = req.to_bytes();
     let r = roundtrip_request(req);
-    let bytes = r.to_bytes();
+    let wire = String::from_utf8_lossy(&built);
     assert!(
-        String::from_utf8_lossy(&bytes).contains("\"Alice\""),
-        "expected quoted display name in wire form, got:\n{}",
-        String::from_utf8_lossy(&bytes),
+        wire.contains("\"Alice\""),
+        "expected quoted display name in built wire form, got:\n{wire}",
     );
     // Also verify the typed accessors that *do* exist still agree.
     assert_eq!(r.from_uri().unwrap().to_string(), "sip:alice@example.com");
@@ -157,27 +160,24 @@ fn request_register_with_authorization_and_expires() {
         .to("sip:alice@example.com")
         .call_id("reg@example.com")
         .cseq(4)
-        .max_forwards(70)
         .authorization(auth)
         .expires(3600)
         .build()
         .unwrap();
+    let built = req.to_bytes();
     let r = roundtrip_request(req);
     assert_eq!(r.method(), Method::Register);
-    // Authorization survives as a raw header; check via raw bytes that the
-    // builder emitted the header (no typed accessor on the request side).
-    let wire = String::from_utf8_lossy(&r.to_bytes()).to_string();
+    // Authorization / Expires survive as raw headers (no typed request-side
+    // accessor). Check the *built* bytes so the assertion targets builder
+    // emission, not parser stability.
+    let wire = String::from_utf8_lossy(&built);
     assert!(
         wire.contains("Authorization: Digest username=\"alice\""),
-        "missing Authorization in wire form:\n{wire}",
+        "missing Authorization in built wire form:\n{wire}",
     );
     assert!(
         wire.contains("Expires: 3600"),
-        "missing Expires header in wire form:\n{wire}",
-    );
-    assert!(
-        wire.contains("Max-Forwards: 70"),
-        "missing Max-Forwards in wire form:\n{wire}",
+        "missing Expires header in built wire form:\n{wire}",
     );
 }
 
@@ -196,11 +196,15 @@ fn request_invite_with_proxy_authorization() {
         .proxy_authorization(auth)
         .build()
         .unwrap();
-    let r = roundtrip_request(req);
-    let wire = String::from_utf8_lossy(&r.to_bytes()).to_string();
+    let built = req.to_bytes();
+    // Reparse purely to confirm the bytes stay parseable; assertions are
+    // against the *built* bytes so we test builder emission, not parser
+    // stability.
+    let _r = roundtrip_request(req);
+    let wire = String::from_utf8_lossy(&built);
     assert!(
         wire.contains("Proxy-Authorization: Digest username=\"alice\""),
-        "missing Proxy-Authorization in wire form:\n{wire}",
+        "missing Proxy-Authorization in built wire form:\n{wire}",
     );
 }
 
@@ -272,7 +276,7 @@ fn request_invite_with_require_supported_allow() {
         .build()
         .unwrap();
     let r = roundtrip_request(req);
-    assert_eq!(r.require().unwrap(), Require(vec!["100rel".to_string()]),);
+    assert_eq!(r.require().unwrap(), Require(vec!["100rel".to_string()]));
     assert_eq!(
         r.supported().unwrap(),
         Supported(vec!["timer".to_string(), "replaces".to_string()]),
@@ -284,24 +288,28 @@ fn request_invite_with_require_supported_allow() {
 }
 
 #[test]
-fn request_invite_with_routes() {
+fn request_bye_with_routes() {
+    // BYE rather than INVITE so this fixture also covers the
+    // CSeq method round-trip on a non-INVITE method.
     let routes = vec![
         "<sip:proxy1.example.com;lr>".to_string(),
         "<sip:proxy2.example.com;lr>".to_string(),
         "<sip:proxy3.example.com;lr>".to_string(),
     ];
     let req = SipRequest::builder()
-        .method(Method::Invite)
+        .method(Method::Bye)
         .uri("sip:bob@example.com")
-        .via("alice.example.com", 5060, "UDP", "z9hG4bKroutes")
-        .from("sip:alice@example.com", "routes-tag")
+        .via("alice.example.com", 5060, "UDP", "z9hG4bKbye-routes")
+        .from("sip:alice@example.com", "bye-routes-tag")
         .to("sip:bob@example.com")
-        .call_id("routes@example.com")
+        .call_id("bye-routes@example.com")
         .cseq(9)
         .route(&routes)
         .build()
         .unwrap();
     let r = roundtrip_request(req);
+    assert_eq!(r.method(), Method::Bye);
+    assert_eq!(r.cseq_method().unwrap(), Method::Bye);
     assert_eq!(r.route_headers(), routes);
 }
 
@@ -340,20 +348,24 @@ fn request_invite_with_ipv6_via_host() {
 }
 
 #[test]
-fn request_invite_with_explicit_max_forwards_and_tcp_via() {
+fn request_options_with_explicit_max_forwards_and_tcp_via() {
+    // OPTIONS rather than INVITE so this fixture also covers the
+    // CSeq method round-trip on a non-INVITE method.
     let req = SipRequest::builder()
-        .method(Method::Invite)
+        .method(Method::Options)
         .uri("sip:bob@example.com")
-        .via("alice.example.com", 5061, "TCP", "z9hG4bKtcp")
-        .from("sip:alice@example.com", "tcp-tag")
+        .via("alice.example.com", 5061, "TCP", "z9hG4bKopt-tcp")
+        .from("sip:alice@example.com", "opt-tcp-tag")
         .to("sip:bob@example.com")
-        .call_id("tcp@example.com")
+        .call_id("opt-tcp@example.com")
         .cseq(11)
         .max_forwards(15)
         .build()
         .unwrap();
     let r = roundtrip_request(req);
-    assert_eq!(r.via_branch().unwrap(), "z9hG4bKtcp");
+    assert_eq!(r.method(), Method::Options);
+    assert_eq!(r.cseq_method().unwrap(), Method::Options);
+    assert_eq!(r.via_branch().unwrap(), "z9hG4bKopt-tcp");
     let vias = r.via_headers_raw();
     assert_eq!(vias.len(), 1);
     assert!(
@@ -432,6 +444,7 @@ fn response_200_with_body() {
         .status(200, "OK")
         .from_request(&req)
         .to_tag("to-tag-respbody")
+        .contact("sip:bob@biloxi.example.com")
         .body(body.clone(), "application/sdp")
         .build()
         .unwrap();
@@ -439,6 +452,10 @@ fn response_200_with_body() {
     assert_eq!(r.status_code(), 200);
     assert_eq!(r.body(), body.as_slice());
     assert_eq!(r.content_type().as_deref(), Some("application/sdp"));
+    assert_eq!(
+        r.contact_uri().map(|u| u.to_string()),
+        Some("sip:bob@biloxi.example.com".to_string()),
+    );
 }
 
 #[test]
@@ -458,6 +475,7 @@ fn response_200_with_session_expires_and_allow() {
         .from_request(&req)
         .to_tag("to-tag-respse")
         .session_expires(1800, Some(Refresher::Uas))
+        .min_se(90)
         .allow(&[Method::Invite, Method::Ack, Method::Bye])
         .build()
         .unwrap();
@@ -469,6 +487,7 @@ fn response_200_with_session_expires_and_allow() {
             refresher: Some(Refresher::Uas),
         },
     );
+    assert_eq!(r.min_se(), Some(MinSe(90)));
     assert_eq!(
         r.allow().unwrap(),
         vec![Method::Invite, Method::Ack, Method::Bye],
@@ -493,12 +512,14 @@ fn response_183_with_rseq() {
         .to_tag("to-tag-resp183")
         .rseq(42)
         .require(&["100rel"])
+        .supported(&["timer"])
         .build()
         .unwrap();
     let r = roundtrip_response(resp);
     assert_eq!(r.status_code(), 183);
     assert_eq!(r.reason(), "Session Progress");
     assert!(r.is_provisional());
-    assert_eq!(r.rseq().unwrap(), rsiprtp::sip::RSeq(42),);
-    assert_eq!(r.require().unwrap(), Require(vec!["100rel".to_string()]),);
+    assert_eq!(r.rseq().unwrap(), RSeq(42));
+    assert_eq!(r.require().unwrap(), Require(vec!["100rel".to_string()]));
+    assert_eq!(r.supported().unwrap(), Supported(vec!["timer".to_string()]));
 }
