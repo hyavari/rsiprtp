@@ -49,3 +49,8 @@ crates/rsiprtp/tests/results/*.html
 crates/rsiprtp/tests/results/*.log
 crates/rsiprtp/tests/results/*.txt
 crates/rsiprtp/tests/results/*.json
+
+# Overnight fuzz wrapper runtime artifacts (per-run libFuzzer logs and
+# crash-triage scratch). Wrapper: fuzz_overnight.ps1.
+wrk_journals/fuzz_logs/
+wrk_journals/fuzz_triage/
