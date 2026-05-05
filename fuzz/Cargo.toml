@@ -178,3 +178,31 @@ path = "fuzz_targets/jitter_push.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "sip_via_typed"
+path = "fuzz_targets/sip_via_typed.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sip_contact"
+path = "fuzz_targets/sip_contact.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sip_name_addr"
+path = "fuzz_targets/sip_name_addr.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sip_cseq"
+path = "fuzz_targets/sip_cseq.rs"
+test = false
+doc = false
+bench = false
