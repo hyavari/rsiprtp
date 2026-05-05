@@ -182,8 +182,10 @@ while ($true) {
   EmitLine ("CRASH run={0} target={1} exit={2} queue={3}" -f $RunIndex, $target, $exitCode, $slot)
 
   # Wait for supervisor to touch RESUME inside the slot. Whole rotation
-  # pauses — a real crash should be triaged before more fuzzing on any
-  # target, since shared corpus mutators may have produced related findings.
+  # pauses — operational triage discipline. Reviewer attention is the
+  # scarce resource; a real crash should be reviewed before more fuzzing
+  # on any target. (The 5 targets have separate corpora, so cross-target
+  # mutator contamination is not the rationale.)
   $waitStart = [DateTime]::UtcNow
   $resumePath = Join-Path $slotPath "RESUME"
   while (-not (Test-Path $resumePath)) {
