@@ -41,17 +41,62 @@
 //! tweaks; the count is what we actually care about for "did the
 //! parser regress?".
 //!
-//! ## Refreshing the budget
+//! ## Modes of operation
 //!
-//! When the parser is intentionally re-tuned and the budget needs
-//! updating, run:
+//! There are two budget sets per fixture:
+//!
+//! - `*_BUDGET` — measured under plain `cargo test`.
+//! - `*_BUDGET_UNDER_COVERAGE` — measured under `cargo llvm-cov`,
+//!   which is how stage 7 of `tools/full_test` runs us.
+//!
+//! At runtime, `invite_allocation_budgets` picks one of the two by
+//! checking `LLVM_PROFILE_FILE`. Both sets are real assertions —
+//! there is no skip path. The earlier (now-removed) skip silently
+//! disabled this oracle in the test-bar pipeline; see the HLD
+//! `wrk_docs/2026.05.06 - HLD - alloc budget under coverage.md` for
+//! why we chose runtime detection over `cfg(coverage)`.
+//!
+//! ## Refreshing the budgets
+//!
+//! Both budgets must be refreshed together when the parser is
+//! intentionally re-tuned. Run **both** of these and update **both**
+//! constant families:
 //!
 //! ```text
+//! # No-coverage baseline (updates *_BUDGET):
 //! cargo test -p rsiprtp --test allocations_sip_parse \
 //!     -- --ignored --nocapture discover_baselines
+//!
+//! # Under-coverage baseline (updates *_BUDGET_UNDER_COVERAGE).
+//! # `--no-cfg-coverage` mirrors stage 7 of the test bar at
+//! # `tools/full_test/src/main.rs` — measure the *exact* config
+//! # that runs in CI, not a slightly different llvm-cov mode:
+//! cargo llvm-cov test -p rsiprtp --test allocations_sip_parse \
+//!     --no-cfg-coverage -- --ignored --nocapture discover_baselines
 //! ```
 //!
-//! and update the `*_BUDGET` constants below.
+//! For each fixture, apply
+//! `max(measured + 4 + spread, ceil(measured * 1.15))` to set the
+//! budget. On Windows MSVC + cargo-llvm-cov 0.8.5 today, the two
+//! budgets coincide because the coverage runtime emits static
+//! counters that don't allocate; on a future toolchain the
+//! under-coverage value may shift (HLD §6 R1). If the under-coverage
+//! ratio diverges sharply (more than ~5x the no-coverage value),
+//! suspect a coverage-tool change rather than a parser regression.
+//!
+//! A maintainer who refreshes only one of the two will get a sharp
+//! failure on the next test bar run — the failure message names the
+//! out-of-budget constant, which makes "you forgot to refresh the
+//! other one" the obvious diagnosis.
+//!
+//! ## Known limitation: stale `LLVM_PROFILE_FILE`
+//!
+//! A developer with a stale `LLVM_PROFILE_FILE` exported in their
+//! shell (e.g. left over from a prior `cargo llvm-cov` run) will
+//! select the under-coverage budget under plain `cargo test`. The
+//! oracle still fires — it's just slightly looser than intended in
+//! that one shell session. We accept this rather than add
+//! belt-and-braces secondary detection (HLD §1).
 
 use rsiprtp::sip::SipMessage;
 use stats_alloc::{Region, Stats, StatsAlloc, INSTRUMENTED_SYSTEM};
@@ -212,10 +257,18 @@ const BUDGET_CASES: &[BudgetCase] = &[
 
 // ---------------------------------------------------------------
 // Manual diagnostic — print allocation counts for each fixture.
-// Marked `#[ignore]` so it doesn't run by default. Use to refresh
-// the budget constants when the parser is intentionally re-tuned:
+// Marked `#[ignore]` so it doesn't run by default. Single test
+// services both refresh paths; pick the invocation that matches
+// the budget set you need to update. See module docstring
+// "Refreshing the budgets" for the full recipe.
+//
+//   # *_BUDGET (no-coverage):
 //   cargo test -p rsiprtp --test allocations_sip_parse \
 //       -- --ignored --nocapture discover_baselines
+//
+//   # *_BUDGET_UNDER_COVERAGE (mirrors test-bar stage 7):
+//   cargo llvm-cov test -p rsiprtp --test allocations_sip_parse \
+//       --no-cfg-coverage -- --ignored --nocapture discover_baselines
 // ---------------------------------------------------------------
 
 #[test]
