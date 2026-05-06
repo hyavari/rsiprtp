@@ -166,13 +166,8 @@ struct BudgetCase {
     fixture_path: &'static str,
     bytes: &'static [u8],
     budget: usize,
-    // S2 lands the data; S3 wires it into the assertion. Suppress
-    // the transient dead-code lint between commits — the `allow`
-    // is removed in S3.
-    #[allow(dead_code)]
     budget_under_coverage: usize,
     constant_name: &'static str,
-    #[allow(dead_code)]
     constant_name_under_coverage: &'static str,
 }
 
@@ -235,34 +230,71 @@ fn discover_baselines() {
     }
 }
 
+/// Returns true when the test process is running under coverage
+/// instrumentation. We detect via `LLVM_PROFILE_FILE`, which
+/// `cargo-llvm-cov` sets for every test process it spawns.
+///
+/// HLD `wrk_docs/2026.05.06 - HLD - alloc budget under coverage.md` §1
+/// considered alternatives (`#[cfg(coverage)]`, RUSTFLAGS sniffing) and
+/// chose this for one decisive reason: our test bar
+/// (`tools/full_test/src/main.rs`) invokes `cargo llvm-cov ...
+/// --no-cfg-coverage`, which suppresses `cfg(coverage)` in the path
+/// that matters most. `LLVM_PROFILE_FILE` is the only signal that's
+/// reliably set by our pipeline.
+fn under_coverage_instrumentation() -> bool {
+    std::env::var_os("LLVM_PROFILE_FILE").is_some()
+}
+
 /// All fixture budgets are checked in a single `#[test]` so cargo
 /// cannot schedule them on different threads — see the module-level
 /// "Why a single `#[test]`" note. Per-fixture failures are
 /// accumulated and reported together so a multi-fixture regression
 /// surfaces all the affected budgets in one go, not just the first.
+///
+/// We pick one of two budget sets per fixture based on whether
+/// `LLVM_PROFILE_FILE` is set (i.e. whether we're under coverage).
+/// Both sets are real assertions — there is no skip path. See the
+/// module docstring's "Refreshing the budgets" section for how to
+/// re-baseline either set.
 #[test]
 fn invite_allocation_budgets() {
-    // Skip under `cargo llvm-cov`: coverage instrumentation injects heap
-    // activity for `__llvm_profile_*` counters on every covered branch,
-    // which inflates allocation counts ~5x and busts these tight budgets
-    // without indicating a real parser regression. `LLVM_PROFILE_FILE` is
-    // set by cargo-llvm-cov for every test process it spawns.
-    if std::env::var_os("LLVM_PROFILE_FILE").is_some() {
-        eprintln!("skipping allocation budget test under llvm-cov instrumentation");
-        return;
-    }
+    let under_cov = under_coverage_instrumentation();
+    eprintln!(
+        "invite_allocation_budgets: mode={}",
+        if under_cov {
+            "under-coverage (asserting *_BUDGET_UNDER_COVERAGE)"
+        } else {
+            "no-coverage (asserting *_BUDGET)"
+        },
+    );
 
     let mut failures: Vec<String> = Vec::new();
 
     for case in BUDGET_CASES {
         let stats = count_parse_allocs(case.bytes);
-        if stats.allocations > case.budget {
+        let (budget, constant) = if under_cov {
+            (case.budget_under_coverage, case.constant_name_under_coverage)
+        } else {
+            (case.budget, case.constant_name)
+        };
+        if stats.allocations > budget {
+            let refresh_cmd = if under_cov {
+                "cargo llvm-cov test -p rsiprtp --test allocations_sip_parse \
+                 --no-cfg-coverage -- --ignored --nocapture discover_baselines"
+            } else {
+                "cargo test -p rsiprtp --test allocations_sip_parse -- \
+                 --ignored --nocapture discover_baselines"
+            };
             failures.push(format!(
                 "  {} ({}): SipMessage::parse allocated {} times; budget is {}. \
                  If this regression is intentional, refresh the baseline via \
-                 `cargo test -p rsiprtp --test allocations_sip_parse -- \
-                 --ignored --nocapture discover_baselines` and update {}.",
-                case.name, case.fixture_path, stats.allocations, case.budget, case.constant_name,
+                 `{}` and update {}.",
+                case.name,
+                case.fixture_path,
+                stats.allocations,
+                budget,
+                refresh_cmd,
+                constant,
             ));
         }
     }
