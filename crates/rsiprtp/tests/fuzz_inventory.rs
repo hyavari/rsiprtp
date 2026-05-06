@@ -39,13 +39,12 @@ fn collect_wrappers(root: &Path) -> Vec<PathBuf> {
     if let Ok(rd) = fs::read_dir(root) {
         for e in rd.flatten() {
             let p = e.path();
-            if p.extension().and_then(|s| s.to_str()) == Some("ps1") {
-                if p.file_name()
+            if p.extension().and_then(|s| s.to_str()) == Some("ps1")
+                && p.file_name()
                     .and_then(|s| s.to_str())
                     .is_some_and(|n| n.contains("fuzz"))
-                {
-                    out.push(p);
-                }
+            {
+                out.push(p);
             }
         }
     }
@@ -80,8 +79,7 @@ fn references_target(content: &str, target: &str) -> bool {
             continue;
         }
         let before_ok = i == 0 || !is_ident_byte(bytes[i - 1]);
-        let after_ok =
-            i + needle.len() == bytes.len() || !is_ident_byte(bytes[i + needle.len()]);
+        let after_ok = i + needle.len() == bytes.len() || !is_ident_byte(bytes[i + needle.len()]);
         if before_ok && after_ok {
             return true;
         }
@@ -96,7 +94,11 @@ fn every_fuzz_target_is_scheduled_in_some_wrapper() {
     let mut targets: BTreeSet<String> = BTreeSet::new();
     targets.extend(list_target_names(&root.join("fuzz").join("fuzz_targets")));
     targets.extend(list_target_names(
-        &root.join("crates").join("rsiprtp").join("fuzz").join("fuzz_targets"),
+        &root
+            .join("crates")
+            .join("rsiprtp")
+            .join("fuzz")
+            .join("fuzz_targets"),
     ));
     assert!(
         !targets.is_empty(),
