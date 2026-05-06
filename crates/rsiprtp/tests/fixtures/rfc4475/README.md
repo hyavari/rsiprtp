@@ -196,19 +196,21 @@ parser sees.
 The byte-perfect claim is independently verifiable.
 [`github.com/josephfrazier/rfc4475`](https://github.com/josephfrazier/rfc4475)
 is an independent decode of RFC 4475 §A.1 published as plain
-filesystem artifacts. Spot-checked: the SHA-256 of `intmeth.dat`
-in that repository matches `intmeth.sip` here byte-for-byte. Two
-independent decodes producing the same hashes is stronger evidence
-than either one in isolation.
+filesystem artifacts. **All 13 fixtures hash-match the corresponding
+`<name>.dat` files in that repository byte-for-byte** (verified by
+fetching `https://raw.githubusercontent.com/josephfrazier/rfc4475/master/<name>.dat`
+for each `<name>` in the catalog table above and computing
+SHA-256). Two independent decodes producing the same hashes for
+every member of the §3.1.1 corpus is stronger evidence than either
+one in isolation.
 
 ## Errata
 
-RFC 4475 errata have **not** yet been browser-checked. The
-`rfc-editor.org` errata-search interface is JavaScript-driven and
-inaccessible to the harness's WebFetch tool; manual verification at
-<https://www.rfc-editor.org/errata_search.php?rfc=4475> is a known
-prerequisite that has not been performed. Any "documented
-conformance" claim made externally on the basis of these fixtures
-should be preceded by an errata browser-check; if errata affecting
-the §A.1 reference messages exist, they may necessitate updates to
-specific fixture bytes (and consequently the SHA-256 column above).
+The RFC Editor errata database reports **"Found 0 records"** for
+RFC 4475 as of 2026-05-06, confirmed via
+<https://www.rfc-editor.org/errata_search.php?rfc=4475> and
+<https://www.rfc-editor.org/errata/rfc4475>. No errata affect the
+§A.1 reference messages, so the SHA-256 column above is the
+authoritative byte set. If errata are filed in the future, this
+section should be re-checked and (if necessary) the fixture bytes
+regenerated.

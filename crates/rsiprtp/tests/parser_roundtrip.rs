@@ -155,6 +155,13 @@ fn rt_rfc4475_unreason() {
     assert_roundtrip_fixed_point(include_bytes!("fixtures/rfc4475/unreason.sip"));
 }
 
+#[test]
+fn rt_rfc4475_noreason() {
+    // §3.1.1.13 "Empty Reason Phrase": SIP/2.0 100 status line with a
+    // zero-length Reason-Phrase (just the trailing SP after the code).
+    assert_roundtrip_fixed_point(include_bytes!("fixtures/rfc4475/noreason.sip"));
+}
+
 // ---------------------------------------------------------------
 // Sanity checks on the oracle itself
 // ---------------------------------------------------------------
