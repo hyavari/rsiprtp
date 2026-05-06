@@ -6,14 +6,15 @@
 //! ≥8h"), this target feeds the same input bytes to both parsers and
 //! panics on any divergence (parse-success structural mismatch or
 //! one-accepts/one-rejects). The semantic check is identical to the
-//! integration test at `tests/parser_diff.rs`; the oracle module that
-//! both consumers share lives at `tests/parser_diff_oracle/mod.rs`.
+//! integration test at `crates/rsiprtp/tests/parser_diff.rs`; the
+//! oracle module that both consumers share lives at
+//! `crates/rsiprtp/tests/parser_diff_oracle/mod.rs`.
 //!
-//! Launch instructions: see `crates/rsiprtp/fuzz/M11_LAUNCH.md`.
+//! Launch instructions: see `fuzz/README.md`.
 
 use libfuzzer_sys::fuzz_target;
 
-#[path = "../../tests/parser_diff_oracle/mod.rs"]
+#[path = "../../crates/rsiprtp/tests/parser_diff_oracle/mod.rs"]
 mod oracle;
 
 fuzz_target!(|data: &[u8]| {

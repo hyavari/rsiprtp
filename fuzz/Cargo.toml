@@ -15,6 +15,15 @@ libfuzzer-sys = "0.4"
 
 rsiprtp = { path = "../crates/rsiprtp" }
 
+# `rsip` 0.4 is the differential-test oracle for the
+# `sip_message_parse_diff` target. It is a fuzz-only dep of this crate
+# (publish = false). The main crate carries `rsip` only as a
+# `[dev-dependencies]` entry; M10 of the parser rewrite removed it
+# from runtime deps. The fuzz target pulls in
+# `crates/rsiprtp/tests/parser_diff_oracle/mod.rs` via `#[path]`, and
+# that file references `rsip::SipMessage` directly.
+rsip = "0.4"
+
 [profile.release]
 debug = 1
 
@@ -217,6 +226,13 @@ bench = false
 [[bin]]
 name = "sip_message_roundtrip"
 path = "fuzz_targets/sip_message_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sip_message_parse_diff"
+path = "fuzz_targets/sip_message_parse_diff.rs"
 test = false
 doc = false
 bench = false
