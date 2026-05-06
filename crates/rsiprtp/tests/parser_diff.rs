@@ -112,12 +112,13 @@ fn diff_handcrafted_response_with_multi_via() {
 //
 // See `tests/fixtures/rfc4475/README.md` for the catalog. These exercise
 // the corner cases described in RFC 4475 §3 ("Valid Messages"). Each
-// fixture is a representative SIP message constructed per the torture-
-// test category — we are testing the same parser corner the RFC §3.1
-// paragraph describes, not asserting byte-perfect copies of the RFC's
-// own example bodies.
+// fixture is the byte-exact decode of the corresponding §A.1 message
+// from RFC 4475 — we assert byte-for-byte conformance against the RFC's
+// own canonical examples, not just "the same parser corner the §3.1
+// paragraph describes". The bytes are protected from line-ending
+// translation by `*.sip -text` in the repo-root `.gitattributes`.
 
-/// §3.1.1 "A short tortuous INVITE": quoted display names with
+/// §3.1.1.1 "A short tortuous INVITE": quoted display names with
 /// embedded SP / quoted-pairs, parameter-name-only forms, header
 /// values broken across lines via line folding, and heavy interior
 /// whitespace (e.g. `SIP  /   2.0  /UDP`).
@@ -139,13 +140,13 @@ fn diff_rfc4475_wsinv_rsip_rejects() {
     let rs = rsip::SipMessage::try_from(bytes);
     assert!(
         rs.is_err(),
-        "rsip 0.4 rejects RFC 4475 §3.1.1 wsinv torture test; \
+        "rsip 0.4 rejects RFC 4475 §3.1.1.1 wsinv torture test; \
          got Ok({rs:?}) — update this test if rsip changed",
     );
     let ours = OurMessage::parse(bytes);
     assert!(
         ours.is_ok(),
-        "our parser must accept RFC 4475 §3.1.1 wsinv; got Err({ours:?})",
+        "our parser must accept RFC 4475 §3.1.1.1 wsinv; got Err({ours:?})",
     );
 }
 
@@ -189,7 +190,7 @@ fn diff_rfc4475_intmeth_both_reject() {
     assert_both_reject("rfc4475_intmeth", bytes);
 }
 
-/// §3.1.2.2 "Valid use of the % escaping": escaped chars in user/
+/// §3.1.1.3 "Valid use of the % escaping": escaped chars in user/
 /// contact URIs.
 ///
 /// **Divergence pinned (byte-perfect §A.1):** the canonical RFC 4475
@@ -201,39 +202,39 @@ fn diff_rfc4475_intmeth_both_reject() {
 /// and merges the fold (see `framing::parse_header_block`'s folding
 /// path).
 ///
-/// The pre-Stage-A representative fixture had no folding so this was
-/// a plain `assert_equivalent`; the byte-perfect §A.1 form exposes
-/// the same rsip line-folding deficiency we already pin on wsinv.
-/// When rsip is dropped at M10 this test should be retargeted to a
-/// direct on-our-parser assertion.
+/// The pre-Stage-A fixture had no folding so this was a plain
+/// `assert_equivalent`; the byte-perfect §A.1 form exposes the same
+/// rsip line-folding deficiency we already pin on wsinv. When rsip
+/// is dropped at M10 this test should be retargeted to a direct
+/// on-our-parser assertion.
 #[test]
 fn diff_rfc4475_esc01_rsip_rejects_folding() {
     let bytes: &[u8] = include_bytes!("fixtures/rfc4475/esc01.sip");
     let rs = rsip::SipMessage::try_from(bytes);
     assert!(
         rs.is_err(),
-        "rsip 0.4 rejects RFC 4475 §3.1.2.2 esc01 (canonical bytes \
+        "rsip 0.4 rejects RFC 4475 §3.1.1.3 esc01 (canonical bytes \
          line-fold the Contact header); got Ok({rs:?}) — update this \
          test if rsip changed",
     );
     let ours = OurMessage::parse(bytes);
     assert!(
         ours.is_ok(),
-        "our parser must accept RFC 4475 §3.1.2.2 esc01; got \
+        "our parser must accept RFC 4475 §3.1.1.3 esc01; got \
          Err({ours:?})",
     );
 }
 
 #[test]
 fn diff_rfc4475_escnull() {
-    // §3.1.2.3 "Escaped nulls in URIs": `%00` in user portion.
+    // §3.1.1.4 "Escaped Nulls in URIs": `%00` in user portion.
     let bytes = include_bytes!("fixtures/rfc4475/escnull.sip");
     assert_equivalent(bytes);
 }
 
 #[test]
 fn diff_rfc4475_esc02() {
-    // §3.1.2.4 "Use of % when it is not an escape": `%` followed by
+    // §3.1.1.5 "Use of % when it is not an escape": `%` followed by
     // non-hex inside header values.
     let bytes = include_bytes!("fixtures/rfc4475/esc02.sip");
     assert_equivalent(bytes);
@@ -241,12 +242,12 @@ fn diff_rfc4475_esc02() {
 
 #[test]
 fn diff_rfc4475_lwsdisp() {
-    // §3.1.2.5 "No LWS between Display Name and `<`".
+    // §3.1.1.6 "Message with No LWS between Display Name and `<`".
     let bytes = include_bytes!("fixtures/rfc4475/lwsdisp.sip");
     assert_equivalent(bytes);
 }
 
-/// §3.1.2.6 "Long values in header fields": exercises size-limit
+/// §3.1.1.7 "Long values in header fields": exercises size-limit
 /// path. Our defense-in-depth caps at 8192 per value; this fixture
 /// sits well below that.
 ///
@@ -259,33 +260,33 @@ fn diff_rfc4475_lwsdisp() {
 /// `failed to tokenize version` error pinned on wsinv (see
 /// `diff_rfc4475_wsinv_rsip_rejects`). Our parser correctly accepts.
 ///
-/// The pre-Stage-A representative fixture had a simpler Via-stack so
-/// this was a plain `assert_equivalent`; the byte-perfect §A.1 form
-/// exposes the same rsip HCOLON-whitespace deficiency we already pin
-/// on wsinv. When rsip is dropped at M10 this test should be
-/// retargeted to a direct on-our-parser assertion.
+/// The pre-Stage-A fixture had a simpler Via-stack so this was a
+/// plain `assert_equivalent`; the byte-perfect §A.1 form exposes the
+/// same rsip HCOLON-whitespace deficiency we already pin on wsinv.
+/// When rsip is dropped at M10 this test should be retargeted to a
+/// direct on-our-parser assertion.
 #[test]
 fn diff_rfc4475_longreq_rsip_rejects_hcolon_whitespace() {
     let bytes: &[u8] = include_bytes!("fixtures/rfc4475/longreq.sip");
     let rs = rsip::SipMessage::try_from(bytes);
     assert!(
         rs.is_err(),
-        "rsip 0.4 rejects RFC 4475 §3.1.2.6 longreq (canonical bytes \
+        "rsip 0.4 rejects RFC 4475 §3.1.1.7 longreq (canonical bytes \
          carry HCOLON-with-interior-whitespace forms in the Via \
          stack); got Ok({rs:?}) — update this test if rsip changed",
     );
     let ours = OurMessage::parse(bytes);
     assert!(
         ours.is_ok(),
-        "our parser must accept RFC 4475 §3.1.2.6 longreq; got \
+        "our parser must accept RFC 4475 §3.1.1.7 longreq; got \
          Err({ours:?})",
     );
 }
 
-/// §3.1.2.7 "Extra trailing octets in a UDP datagram": the first
+/// §3.1.1.8 "Extra trailing octets in a UDP datagram": the first
 /// message has `Content-Length: 0` (no body), but the datagram
 /// contains a fully-formed second request after that. RFC 4475
-/// §3.1.2.7 says: *"Implementations should process the request and
+/// §3.1.1.8 says: *"Implementations should process the request and
 /// ignore the extra bytes."*
 ///
 /// **Divergence pinned:** rsip 0.4 ignores Content-Length and
@@ -318,7 +319,7 @@ fn diff_rfc4475_dblreq_rsip_keeps_trailing() {
     );
 }
 
-/// §3.1.2.8 "Semicolons in URI user part": RFC 3261 §25.1
+/// §3.1.1.9 "Semicolon-separated parameters in URI user part": RFC 3261 §25.1
 /// `user-unreserved = "&" / "=" / "+" / "$" / "," / ";" / "?" /
 /// "/"` — so `;` is a legal user character. The Request-URI
 /// `sip:user;par=u%40example.net@example.com` therefore has user
@@ -352,7 +353,7 @@ fn diff_rfc4475_semiuri_rsip_rejects() {
     );
 }
 
-/// §3.1.2.9 "Varied and unknown transport types in Via". RFC 3261
+/// §3.1.1.10 "Varied and Unknown Transport Types in Via". RFC 3261
 /// §20.42 grammar: `transport-param = "transport=" ( "udp" / "tcp"
 /// / "sctp" / "tls" / other-transport )` where `other-transport =
 /// token`. Unknown but token-shaped transports MUST be accepted at
@@ -410,7 +411,9 @@ fn diff_rfc4475_mpart01() {
 
 #[test]
 fn diff_rfc4475_unreason() {
-    // §3.1.2.10 "Unusual REGISTER request with binding".
+    // §3.1.1.12 "Unusual Reason Phrase": a 200 response whose
+    // Reason-Phrase carries non-ASCII (UTF-8 Cyrillic) bytes, per
+    // RFC 3261 §25.1 Reason-Phrase grammar admitting UTF8-NONASCII.
     let bytes = include_bytes!("fixtures/rfc4475/unreason.sip");
     assert_equivalent(bytes);
 }

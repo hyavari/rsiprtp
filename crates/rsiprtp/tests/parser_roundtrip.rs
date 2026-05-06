@@ -93,7 +93,7 @@ fn rt_handcrafted_response_with_multi_via() {
 
 #[test]
 fn rt_rfc4475_wsinv() {
-    // §3.1.1 short tortuous INVITE — folding + interior whitespace.
+    // §3.1.1.1 short tortuous INVITE — folding + interior whitespace.
     // First serialization collapses the folding.
     assert_roundtrip_fixed_point(include_bytes!("fixtures/rfc4475/wsinv.sip"));
 }
@@ -125,7 +125,7 @@ fn rt_rfc4475_longreq() {
 
 #[test]
 fn rt_rfc4475_dblreq() {
-    // §3.1.2.7 trailing octets after Content-Length: 0. Our parser
+    // §3.1.1.8 trailing octets after Content-Length: 0. Our parser
     // truncates body to the declared length per RFC 3261 §18.3, so
     // the trailing octets are dropped on first serialize. Fixed
     // point holds at m2.

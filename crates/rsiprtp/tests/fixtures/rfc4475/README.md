@@ -3,35 +3,41 @@
 [RFC 4475](https://datatracker.ietf.org/doc/html/rfc4475) ("Session
 Initiation Protocol (SIP) Torture Test Messages") defines a corpus of
 intentionally-stressful SIP messages designed to exercise parser
-corners. These fixtures are *representative* messages constructed per
-the categories in §3 ("Valid Messages") and §4 ("Invalid Messages") —
-each fixture exercises the same parser corner the RFC §3.1 paragraph
-describes, not necessarily the byte-perfect example from the RFC body.
+corners. These fixtures are byte-exact decodes of RFC 4475 Appendix
+A.1 (the encoded reference messages). They are protected by a
+`*.sip -text` rule in the repo-root `.gitattributes` so the bytes
+round-trip git verbatim across platforms — the SHA-256 column below
+is reproducible on any host.
 
-Each `.sip` file contains literal CRLF-terminated bytes and ends with
-a `\r\n\r\n` body separator. The fixtures themselves are the
-authoritative artifacts; if regeneration is ever needed, consult RFC
-4475 directly.
+Each `.sip` file is the canonical wire form: CRLF line endings, a
+`\r\n\r\n` body separator, and (where applicable) a body that may
+contain bare octets including `0x0a` inside binary attachments. Do
+not edit these files; they are the artifact under test.
 
-| File | Description | RFC § |
-|---|---|---|
-| `wsinv.sip` | Short tortuous INVITE: quoted display names with embedded SP / quoted-pairs, parameter-name-only forms, exotic interior whitespace, and folded headers. (Pinned divergence — rsip 0.4 rejects the whole message; see `diff_rfc4475_wsinv_rsip_rejects`.) | §3.1.1 |
-| `esc01.sip` | Valid `%HH` escapes throughout user, contact, and URI parameter portions. | §3.1.2.2 |
-| `escnull.sip` | Escaped NUL bytes (`%00`) in user portion of `Contact:` URIs. | §3.1.2.3 |
-| `esc02.sip` | `%` characters in header *values* that are not `%HH` escape sequences. | §3.1.2.4 |
-| `lwsdisp.sip` | Display name and `<addr-spec>` with no LWS between them (e.g. `"caller"<sip:caller@…>`). | §3.1.2.5 |
-| `longreq.sip` | Long header values (~200-char display name and user portion) — exercises the value-length path within our 8192-byte defense-in-depth cap. | §3.1.2.6 |
-| `dblreq.sip` | `Content-Length: 0` request with extra octets after the body (a complete second request). The extra bytes must be ignored. (Pinned divergence — rsip 0.4 captures the trailing bytes as the body; see `diff_rfc4475_dblreq_rsip_keeps_trailing`.) | §3.1.2.7 |
-| `semiuri.sip` | Semicolons in URI user part (`sip:user;par=u%40example.net@example.com`). (Pinned divergence — rsip 0.4 rejects; see `diff_rfc4475_semiuri_rsip_rejects`. M6 also fixed a bug in our URI parser where `;` before `@` was treated as the params boundary.) | §3.1.2.8 |
-| `transports.sip` | Multiple `Via:` lines covering UDP, TCP, SCTP, TLS, TLS-SCTP, and an unknown `TUNA` transport. (Pinned divergence — rsip 0.4's typed-Via rejects unknown transport tokens; see `diff_rfc4475_transports_rsip_rejects_unknown_transport`.) | §3.1.2.9 |
-| `unreason.sip` | Unusual REGISTER request with multi-segment binding: quoted display name, multiple `Contact:` lines with `q=` and `expires=` parameters, an unknown extension parameter. | §3.1.2.10 |
+## §3.1.1 Valid Messages — catalog
 
-The following §3 sub-sections are intentionally **omitted**:
+All 13 §3.1.1 valid-message sub-sections have byte-exact fixtures (12 accepted; `intmeth` documented-rejection by closed-set Method policy per §3.1.1.2 prose).
 
-- **§3.1.2.1 intmeth** (Wide range of valid characters in method
-  token) — our `Method` enum is a closed set per RFC 3261 §7.1; we
-  reject exotic method tokens like `!interesting-Method`. Skipped.
-- **§3.1.2.11 noreason** (Unknown method) — same reason as §3.1.2.1.
+| File | Description | RFC § | SHA-256 |
+|---|---|---|---|
+| `wsinv.sip` | Short tortuous INVITE: quoted display names with embedded SP / quoted-pairs, parameter-name-only forms, exotic interior whitespace, and folded headers. (Pinned divergence — rsip 0.4 rejects the whole message; see `diff_rfc4475_wsinv_rsip_rejects`.) | §3.1.1.1 | `d6f6cdee99cd0a1f8e3d9a0fdd67c877700e19ab86d8186dada06f61260e3e61` |
+| `intmeth.sip` | Wide range of valid characters in the method token (every byte legal under RFC 3261 §25.1 `token`, including `! * + . ' ~ %`). Both parsers reject — ours by closed-set `Method` enum policy (RFC 3261 §7.1), rsip 0.4 by tokenizer narrowness; see `diff_rfc4475_intmeth_both_reject`. | §3.1.1.2 | `b957a8292c1c0a9851fe94705b90f94320738f43aacde64998e401f742ef688d` |
+| `esc01.sip` | Valid `%HH` escapes throughout user, contact, and URI parameter portions; the canonical bytes also line-fold the `Contact:` header. (Pinned divergence — rsip 0.4 rejects the SP-led continuation; see `diff_rfc4475_esc01_rsip_rejects_folding`.) | §3.1.1.3 | `be3a316d4ce5f69cad474646191e390dd4b50fc8371e44b5197fe1237781973e` |
+| `escnull.sip` | Escaped NUL bytes (`%00`) in the user portion of `To:`, `From:`, and `Contact:` URIs. | §3.1.1.4 | `263fe2ecd12a5ccbb6c67b3174e9211d11da9b600e7d69666a86d2ee42873e90` |
+| `esc02.sip` | `%` characters in header *values* that are not `%HH` escape sequences. | §3.1.1.5 | `9a9c59449f00327b02071feafc8e5c2a261c98c818044167894cc17809a12199` |
+| `lwsdisp.sip` | Display name and `<addr-spec>` with no LWS between them (e.g. `"caller"<sip:caller@…>`). | §3.1.1.6 | `d1b36b6316c12824f6f04bf6b1fd1f021cade9b74871693b9c3474cd9fa7f4e6` |
+| `longreq.sip` | Long header values — exercises the value-length path within our 8192-byte defense-in-depth cap. The canonical bytes also carry HCOLON-with-interior-whitespace forms in the `Via:` stack. (Pinned divergence — rsip 0.4 rejects the HCOLON-whitespace forms; see `diff_rfc4475_longreq_rsip_rejects_hcolon_whitespace`.) | §3.1.1.7 | `185739292bc676760e5b1cca77c87705aa570240171c506ad76f8c35af0ecdaa` |
+| `dblreq.sip` | `Content-Length: 0` request with extra octets after the body (a complete second request). The extra bytes must be ignored. (Pinned divergence — rsip 0.4 captures the trailing bytes as the body; see `diff_rfc4475_dblreq_rsip_keeps_trailing`.) | §3.1.1.8 | `a6be48426565c2a705389c4ce2ea17e57b891cb13f80490a2cb9392c797b46ef` |
+| `semiuri.sip` | Semicolons in URI user part (`sip:user;par=u%40example.net@example.com`). (Pinned divergence — rsip 0.4 rejects; see `diff_rfc4475_semiuri_rsip_rejects`. M6 also fixed a bug in our URI parser where `;` before `@` was treated as the params boundary.) | §3.1.1.9 | `87bbaed6b4b354dbd3c5c7a20e66686303c63e43a0aa19b89de1ac75231611a2` |
+| `transports.sip` | Five `Via:` lines covering, in order, UDP, SCTP, TLS, `UNKNOWN`, and TCP transports. (Pinned divergence — rsip 0.4's typed-Via rejects unknown transport tokens; see `diff_rfc4475_transports_rsip_rejects_unknown_transport`.) | §3.1.1.10 | `33b4553a3b9418121b099ff07882535151edd6a1e81898c63a916aad2cbf90bc` |
+| `mpart01.sip` | Multipart MIME `MESSAGE` request — first part `text/plain`, second part `application/octet-stream` carrying a binary (DER-encoded) attachment. The body contains three bare LF (`0x0a`) octets that are *not* line terminators; tier-1 framing finds `\r\n\r\n` first and the body rides through verbatim. | §3.1.1.11 | `92147c8e24997bac59629e1b163767697d0d6d499af87f89e325d69968bec3ba` |
+| `unreason.sip` | 200 response whose Reason-Phrase carries non-ASCII (UTF-8 Cyrillic) bytes — exercises RFC 3261 §25.1 `Reason-Phrase` UTF8-NONASCII / UTF8-CONT grammar. | §3.1.1.12 | `4f939d6ebf4817eea70f011d3209e83732872ffc20ffd304b244084dc392f4d7` |
+| `noreason.sip` | `SIP/2.0 100 \r\n` status line — Reason-Phrase is empty (just the trailing SP after the status code). RFC 3261 §25.1 `Reason-Phrase = *(...)` admits zero length. | §3.1.1.13 | `07e11e470a69fffa3674de805e5165d1351a9439a91045ee70c9570ea24ab4fe` |
+
+The hashes above are reproducible on any host with
+`Get-FileHash -Algorithm SHA256 *.sip` (PowerShell) or
+`sha256sum *.sip` (POSIX), provided the `*.sip -text` rule in the
+repo-root `.gitattributes` is active for the working tree.
 
 ## §4 Invalid Messages — `rfc4475_invalid/`
 
@@ -45,6 +51,13 @@ to be rejected by **both** rsip 0.4 and our parser via
 | `badaspec_no_version.sip` | Request line missing the `SIP/2.0` SIP-Version token entirely. | §4 (badaspec) |
 | `badaspec_garbage_start.sip` | Start line that is neither a valid request line nor a valid status line. | §4 (badaspec) |
 
+The §4 corpus is intentionally narrow here — only the `badaspec_*`
+shapes that exercise tier-1 framing rejection. The full RFC 4475 §4
+set (`ncl`, `scalar*`, `lwsruri`, `badinv01`, `regbadct`, …) raises
+per-fixture questions (do both parsers reject for the right reason?
+does our parser reject at framing or only at typed-form?) that
+deserve their own corpus expansion. Out of scope for this milestone.
+
 The RFC 4475 §4 `ncl` test (negative `Content-Length`) was considered
 and dropped: both parsers store header values as strings and only
 validate the digits when bounding the body, which is a typed-form /
@@ -52,12 +65,15 @@ body-extraction concern rather than a tier-1 framing concern. The §4
 ncl test really exercises tier-2 logic that this harness does not
 cover.
 
-## Pinned divergences from this milestone (M6)
+## Pinned divergences from this milestone (M6 + byte-perfect upgrade)
 
 | Test | Direction | Spec citation |
 |---|---|---|
 | `diff_rfc4475_wsinv_rsip_rejects` | rsip rejects, ours accepts | RFC 3261 §7.3.1 (line folding) + §25.1 (LWS in HCOLON / SEMI) |
-| `diff_rfc4475_dblreq_rsip_keeps_trailing` | both accept; rsip captures trailing octets as body, ours truncates per Content-Length | RFC 3261 §18.3 / RFC 4475 §3.1.2.7 |
+| `diff_rfc4475_esc01_rsip_rejects_folding` | rsip rejects, ours accepts | RFC 3261 §7.3.1 (line folding) — canonical §A.1 bytes fold the `Contact:` header |
+| `diff_rfc4475_longreq_rsip_rejects_hcolon_whitespace` | rsip rejects, ours accepts | RFC 3261 §25.1 `HCOLON = *( SP / HTAB ) ":" SWS` — canonical §A.1 Via stack uses interior whitespace around `:` |
+| `diff_rfc4475_intmeth_both_reject` | both reject (ours by §7.1 closed-set policy; rsip by tokenizer narrowness) | RFC 3261 §7.1 method-token grammar; RFC 4475 §3.1.1.2 prose explicitly allows "501 Not Implemented" |
+| `diff_rfc4475_dblreq_rsip_keeps_trailing` | both accept; rsip captures trailing octets as body, ours truncates per Content-Length | RFC 3261 §18.3 / RFC 4475 §3.1.1.8 |
 | `diff_rfc4475_semiuri_rsip_rejects` | rsip rejects, ours accepts | RFC 3261 §25.1 `user-unreserved` includes `;`; §19.1.1 grammar requires `@` to bound userinfo before params |
 | `diff_rfc4475_transports_rsip_rejects_unknown_transport` | rsip's typed-Via rejects, ours accepts | RFC 3261 §20.42 `transport-param` `other-transport = token` |
 
@@ -103,7 +119,10 @@ mandate CRLF as the line terminator; both parsers are non-strict but
 the kind / status agree. The oracle's `(Ok, Ok)` arm carries a
 `has_bare_lf_in_start_line` predicate that catches this whole class
 without enumerating wire shapes), the running rsip 0.4
-spec-deficiency count is **14 active distinct types**. All are retargeted
+spec-deficiency count is **14 active distinct types** (the
+byte-perfect upgrade did not add new types — the new `esc01` and
+`longreq` pins are in the same families as the existing `wsinv` pin:
+folding (§7.3.1) and HCOLON-whitespace (§25.1)). All are retargeted
 to direct on-our-parser assertions when rsip is dropped from runtime
 deps at M10.
 
@@ -137,3 +156,59 @@ even when that `;` lay inside the userinfo (i.e., before the `@`). RFC
 parsing begins. Surfaced by `wsinv.sip` and `semiuri.sip`; fixed by
 restricting the `;` search to the substring after the `@` (or the
 whole rest if there is no `@`).
+
+## Regenerating from RFC 4475
+
+The §A.1 corpus is published as a single base64-encoded gzip-compressed
+tar archive embedded in the RFC text between
+`-- BEGIN MESSAGE ARCHIVE --` and `-- END MESSAGE ARCHIVE --` markers.
+**Trap:** the RFC text contains *two* such marker pairs — the first
+is inside the Perl decoder source listing (illustrative, not data),
+the second is the real archive. Always take the **second** pair.
+
+The decode procedure (rerun this if the upstream RFC publishes
+errata or if you ever need to verify the bytes from scratch):
+
+```sh
+# 1. Fetch the RFC 4475 plain-text form
+curl -sSL https://www.rfc-editor.org/rfc/rfc4475.txt -o rfc4475.txt
+
+# 2. Extract the second BEGIN/END MESSAGE ARCHIVE block
+#    (the first one is inside the Perl decoder source listing).
+#    Strip the page-header / RFC line-numbering noise as you go.
+
+# 3. base64 -d | gunzip | tar x
+#    Yields per-message files: wsinv, intmeth, esc01, escnull, esc02,
+#    lwsdisp, longreq, dblreq, semiuri, transports, mpart01, unreason,
+#    noreason, plus the §4 invalid set (ncl, scalar02, scalarlg,
+#    lwsruri, badinv01, regbadct, …).
+
+# 4. Compare SHA-256 of each tar member against the table above.
+```
+
+The 13 `.sip` files in this directory are the verbatim tar-member
+bytes for the 13 §3.1.1 valid messages. No transformation; no
+`include_bytes!` reformatting; the bytes on disk are the bytes the
+parser sees.
+
+## External corroboration
+
+The byte-perfect claim is independently verifiable.
+[`github.com/josephfrazier/rfc4475`](https://github.com/josephfrazier/rfc4475)
+is an independent decode of RFC 4475 §A.1 published as plain
+filesystem artifacts. Spot-checked: the SHA-256 of `intmeth.dat`
+in that repository matches `intmeth.sip` here byte-for-byte. Two
+independent decodes producing the same hashes is stronger evidence
+than either one in isolation.
+
+## Errata
+
+RFC 4475 errata have **not** yet been browser-checked. The
+`rfc-editor.org` errata-search interface is JavaScript-driven and
+inaccessible to the harness's WebFetch tool; manual verification at
+<https://www.rfc-editor.org/errata_search.php?rfc=4475> is a known
+prerequisite that has not been performed. Any "documented
+conformance" claim made externally on the basis of these fixtures
+should be preceded by an errata browser-check; if errata affecting
+the §A.1 reference messages exist, they may necessitate updates to
+specific fixture bytes (and consequently the SHA-256 column above).
