@@ -384,6 +384,30 @@ fn diff_rfc4475_transports_rsip_rejects_unknown_transport() {
     assert_eq!(d.transport, "TUNA");
 }
 
+/// §3.1.1.11 "Multipart MIME Message": a `MESSAGE` request whose
+/// body is a multipart/mixed payload — first part `text/plain`, second
+/// part `application/octet-stream` carrying a binary (DER-encoded)
+/// attachment. Tier-1 framing reads the headers (terminated with the
+/// canonical `\r\n\r\n` separator) and captures the multipart body
+/// verbatim as opaque bytes; we don't unpack the multipart content at
+/// parse time.
+///
+/// Notable property of the byte-perfect §A.1 bytes: the body contains
+/// three bare LF (`0x0a`) bytes that are not line terminators —
+/// they're just `0x0a` octets inside the binary DER payload. The
+/// header section uses CRLF correctly, so framing finds `\r\n\r\n`
+/// before any of these bare LFs are seen, and they ride along
+/// untouched in the body.
+///
+/// Both parsers accept and produce byte-equal bodies; `assert_equivalent`
+/// covers it. The fixture's value is the explicit RFC 4475 §3.1.1.11
+/// conformance claim, byte-for-byte from §A.1.
+#[test]
+fn diff_rfc4475_mpart01() {
+    let bytes = include_bytes!("fixtures/rfc4475/mpart01.sip");
+    assert_equivalent(bytes);
+}
+
 #[test]
 fn diff_rfc4475_unreason() {
     // §3.1.2.10 "Unusual REGISTER request with binding".

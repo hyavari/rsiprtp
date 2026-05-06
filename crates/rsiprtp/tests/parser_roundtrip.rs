@@ -143,6 +143,14 @@ fn rt_rfc4475_transports() {
 }
 
 #[test]
+fn rt_rfc4475_mpart01() {
+    // §3.1.1.11 "Multipart MIME Message": MESSAGE with a multipart/mixed
+    // body containing a binary (DER) attachment. Body is opaque to the
+    // tier-1 parser, so round-trip just preserves the bytes verbatim.
+    assert_roundtrip_fixed_point(include_bytes!("fixtures/rfc4475/mpart01.sip"));
+}
+
+#[test]
 fn rt_rfc4475_unreason() {
     assert_roundtrip_fixed_point(include_bytes!("fixtures/rfc4475/unreason.sip"));
 }
