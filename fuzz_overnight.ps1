@@ -41,6 +41,7 @@ $Profiles = @{
   "sip" = @(
     "sip_message_roundtrip",
     "sip_via_typed",
+    "sip_via_typed_roundtrip",
     "sip_contact",
     "sip_name_addr",
     "sip_cseq",
