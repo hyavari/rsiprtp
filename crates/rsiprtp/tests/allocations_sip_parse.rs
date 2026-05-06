@@ -95,24 +95,57 @@ const FIXTURE_INVITE_COMPACT_VIA: &[u8] =
 const FIXTURE_INVITE_LONGREQ: &[u8] = include_bytes!("fixtures/rfc4475/longreq.sip");
 
 // ---------------------------------------------------------------
-// Budget constants. Formula: max(measured + 4, ceil(measured * 1.15)),
-// capped at measured * 1.5. The +4 floor keeps tiny fixtures from
-// asserting on a literally-zero headroom; the 1.15x multiplier
-// allows for harmless refactors (e.g. one extra `String::from`
-// for a header parameter); the 1.5x cap keeps regressions from
-// hiding behind a generous budget.
+// Budget constants. Two parallel sets per fixture:
+//
+//   *_BUDGET                  — measured under plain `cargo test`.
+//   *_BUDGET_UNDER_COVERAGE   — measured under `cargo llvm-cov`,
+//                               which is how stage 7 of the test bar
+//                               (`tools/full_test`) runs us.
+//
+// The two-tier scheme exists because coverage instrumentation may
+// inject heap activity for `__llvm_profile_*` counters on covered
+// branches; the count is platform-dependent (effectively zero
+// inflation on Windows MSVC + cargo-llvm-cov 0.8.5 today, but other
+// toolchains may differ). Asserting only the `cargo test` budget
+// would silently disable the oracle under stage 7; asserting only
+// the loosest of the two would let no-coverage regressions slip.
+// Mode is picked at the call site via `under_coverage_instrumentation()`.
+//
+// Formula for both: max(measured + 4 + spread, ceil(measured * 1.15)),
+// where `spread = max - min` over N=5 consecutive measurement runs.
+// The +4 floor keeps tiny fixtures from asserting on a literally-zero
+// headroom; the 1.15x multiplier allows for harmless refactors (e.g.
+// one extra `String::from` for a header parameter); `spread` absorbs
+// run-to-run measurement noise.
 // ---------------------------------------------------------------
 
 /// Measured 2026-05-06: 42 allocations. Budget 49 = ceil(42 * 1.15).
 const TYPICAL_INVITE_ALLOC_BUDGET: usize = 49;
+
+/// Measured 2026-05-06 under coverage (median of N=5, spread=0):
+/// 42 allocations. Budget 49 = ceil(42 * 1.15).
+/// (Today coincides with the no-coverage budget — Windows MSVC +
+/// cargo-llvm-cov 0.8.5 emits static counters that don't allocate.
+/// Kept as a separate constant so the contract survives a toolchain
+/// bump that changes that assumption.)
+const TYPICAL_INVITE_ALLOC_BUDGET_UNDER_COVERAGE: usize = 49;
 
 /// Measured 2026-05-06: 13 allocations. Budget 17 = 13 + 4 (the +4
 /// floor — 1.15x would only buy us 2 extra slots, which isn't enough
 /// headroom for harmless tweaks on a 4-line fixture).
 const BODY_INVITE_ALLOC_BUDGET: usize = 17;
 
+/// Measured 2026-05-06 under coverage (median of N=5, spread=0):
+/// 13 allocations. Budget 17 = 13 + 4 (floor; same rationale as
+/// the no-coverage budget).
+const BODY_INVITE_ALLOC_BUDGET_UNDER_COVERAGE: usize = 17;
+
 /// Measured 2026-05-06: 42 allocations. Budget 49 = ceil(42 * 1.15).
 const COMPACT_INVITE_ALLOC_BUDGET: usize = 49;
+
+/// Measured 2026-05-06 under coverage (median of N=5, spread=0):
+/// 42 allocations. Budget 49 = ceil(42 * 1.15).
+const COMPACT_INVITE_ALLOC_BUDGET_UNDER_COVERAGE: usize = 49;
 
 /// Measured 2026-05-06 (byte-perfect RFC 4475 §A.1): 224 allocations
 /// on the canonical "longreq" fixture. Budget 258 = ceil(224 * 1.15).
@@ -124,12 +157,23 @@ const COMPACT_INVITE_ALLOC_BUDGET: usize = 49;
 /// message stays sub-linear in header-value length.
 const LONGREQ_INVITE_ALLOC_BUDGET: usize = 258;
 
+/// Measured 2026-05-06 under coverage (median of N=5, spread=0):
+/// 224 allocations. Budget 258 = ceil(224 * 1.15).
+const LONGREQ_INVITE_ALLOC_BUDGET_UNDER_COVERAGE: usize = 258;
+
 struct BudgetCase {
     name: &'static str,
     fixture_path: &'static str,
     bytes: &'static [u8],
     budget: usize,
+    // S2 lands the data; S3 wires it into the assertion. Suppress
+    // the transient dead-code lint between commits — the `allow`
+    // is removed in S3.
+    #[allow(dead_code)]
+    budget_under_coverage: usize,
     constant_name: &'static str,
+    #[allow(dead_code)]
+    constant_name_under_coverage: &'static str,
 }
 
 const BUDGET_CASES: &[BudgetCase] = &[
@@ -138,28 +182,36 @@ const BUDGET_CASES: &[BudgetCase] = &[
         fixture_path: "crates/rsiprtp/tests/fixtures/mdsiprtp3/invite_with_via.sip",
         bytes: FIXTURE_INVITE_WITH_VIA,
         budget: TYPICAL_INVITE_ALLOC_BUDGET,
+        budget_under_coverage: TYPICAL_INVITE_ALLOC_BUDGET_UNDER_COVERAGE,
         constant_name: "TYPICAL_INVITE_ALLOC_BUDGET",
+        constant_name_under_coverage: "TYPICAL_INVITE_ALLOC_BUDGET_UNDER_COVERAGE",
     },
     BudgetCase {
         name: "invite_with_body.sip",
         fixture_path: "crates/rsiprtp/tests/fixtures/mdsiprtp3/invite_with_body.sip",
         bytes: FIXTURE_INVITE_WITH_BODY,
         budget: BODY_INVITE_ALLOC_BUDGET,
+        budget_under_coverage: BODY_INVITE_ALLOC_BUDGET_UNDER_COVERAGE,
         constant_name: "BODY_INVITE_ALLOC_BUDGET",
+        constant_name_under_coverage: "BODY_INVITE_ALLOC_BUDGET_UNDER_COVERAGE",
     },
     BudgetCase {
         name: "invite_compact_via.sip",
         fixture_path: "crates/rsiprtp/tests/fixtures/handcrafted/invite_compact_via.sip",
         bytes: FIXTURE_INVITE_COMPACT_VIA,
         budget: COMPACT_INVITE_ALLOC_BUDGET,
+        budget_under_coverage: COMPACT_INVITE_ALLOC_BUDGET_UNDER_COVERAGE,
         constant_name: "COMPACT_INVITE_ALLOC_BUDGET",
+        constant_name_under_coverage: "COMPACT_INVITE_ALLOC_BUDGET_UNDER_COVERAGE",
     },
     BudgetCase {
         name: "rfc4475/longreq.sip",
         fixture_path: "crates/rsiprtp/tests/fixtures/rfc4475/longreq.sip",
         bytes: FIXTURE_INVITE_LONGREQ,
         budget: LONGREQ_INVITE_ALLOC_BUDGET,
+        budget_under_coverage: LONGREQ_INVITE_ALLOC_BUDGET_UNDER_COVERAGE,
         constant_name: "LONGREQ_INVITE_ALLOC_BUDGET",
+        constant_name_under_coverage: "LONGREQ_INVITE_ALLOC_BUDGET_UNDER_COVERAGE",
     },
 ];
 
