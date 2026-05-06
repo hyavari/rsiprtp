@@ -54,7 +54,6 @@ $Profiles = @{
     "sdp_session"
   )
   "sip-diff" = @(
-    "sip_message_parse",
     "sip_message_parse_diff"
   )
   "rtp" = @(
