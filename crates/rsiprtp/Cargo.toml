@@ -90,6 +90,10 @@ hex.workspace = true
 # (matching the previous runtime version) so the diff harness keeps
 # pinning the same set of rsip 0.4 spec deficiencies.
 rsip = "0.4"
+# Property-based testing — drives `tests/proptest_*.rs`. Generators
+# emit structurally-valid SIP/SDP inputs and feed them to the existing
+# round-trip oracles, complementing the libfuzzer corpus under `fuzz/`.
+proptest = "1"
 
 [[example]]
 name = "basic_call"

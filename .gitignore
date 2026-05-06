@@ -54,3 +54,11 @@ crates/rsiprtp/tests/results/*.json
 # crash-triage scratch). Wrapper: fuzz_overnight.ps1.
 wrk_journals/fuzz_logs/
 wrk_journals/fuzz_triage/
+
+# proptest persistence files (written under each crate's tests dir on
+# failure; the failing seed is also in the panic message and a fresh
+# regression file is regenerated on repro). proptest 1.11 writes flat
+# files like `<test_name>.proptest-regressions` rather than a dir, so
+# match the suffix glob too.
+proptest-regressions/
+*.proptest-regressions
