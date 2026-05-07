@@ -1375,3 +1375,45 @@ fn normalize_does_not_apply_quoted_pair_outside_string_or_comment() {
     assert!(out.contains('('), "expected '(' preserved, got: {out:?}");
     assert!(out.contains(')'), "expected ')' preserved, got: {out:?}");
 }
+
+/// SIP fuzz finding (parallel-overnight, 2026-05-06): a malformed
+/// header/body separator of the form `\n\r\n` (LF CR LF) — i.e. a
+/// bare LF followed by a CRLF — which rsip 0.4 accepts as a valid
+/// separator but our framer rejects. RFC 3261 §7.1 mandates the
+/// separator is `CRLF CRLF` (`\r\n\r\n`); we tolerate `\n\n` for
+/// legacy interoperability (see
+/// `framing::test_split_message_lf_only_fallback`) but deliberately
+/// do **not** accept the asymmetric `\n\r\n` shape.
+///
+/// Wire shape: `SIP/2.0 223 X\r\nH: V\n\r\nbody`. The header line
+/// `H: V` is terminated by a bare `\n`; the next two bytes `\r\n`
+/// then act as the (malformed) separator and `body` follows. There
+/// is no `\r\n\r\n` (only one `\r` in the candidate region) and no
+/// `\n\n` (the two `\n`s have a `\r` between them), so our
+/// `find_separator` returns `None`.
+///
+/// **Divergence pinned:** rsip accepts, ours rejects with
+/// `"no header/body separator found"`. Our parser is RFC-correct
+/// here — rsip's framer is the more permissive side. Update this
+/// test if rsip tightens its framer to require `\r\n\r\n` per §7.1,
+/// or if we deliberately broaden our `find_separator` to accept the
+/// `\n\r\n` shape.
+#[test]
+fn separator_lf_cr_lf_rsip_accepts_we_reject() {
+    // RFC 3261 §7.1: header/body separator MUST be CRLF CRLF. Our
+    // framer additionally tolerates `\n\n` for legacy peers but not
+    // `\n\r\n`. rsip 0.4's framer is more permissive.
+    let bytes: &[u8] = b"SIP/2.0 223 X\r\nH: V\n\r\nbody";
+    let rs = oracle::rsip_to_diff(bytes);
+    let ours = oracle::ours_to_diff(bytes);
+    assert!(
+        rs.is_ok(),
+        "rsip should accept the \\n\\r\\n separator: {:?}",
+        rs.err(),
+    );
+    let err = ours.expect_err("ours should reject the \\n\\r\\n separator");
+    assert!(
+        err.contains("no header/body separator"),
+        "ours error should mention missing separator; got: {err}",
+    );
+}

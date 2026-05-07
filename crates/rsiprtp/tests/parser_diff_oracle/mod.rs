@@ -1178,6 +1178,16 @@ pub fn assert_equivalent(bytes: &[u8]) {
             //    broke. We now reject at parse time. rsip 0.4 still
             //    accepts. Pin:
             //    `status_line_reason_ctl_byte_rsip_accepts_we_reject`.
+            // 6. Header/body separator of shape `\n\r\n` (LF CR LF):
+            //    RFC 3261 §7.1 mandates the separator is exactly
+            //    `CRLF CRLF` (`\r\n\r\n`). Our framer additionally
+            //    tolerates `\n\n` as a legacy fallback (pinned by
+            //    `framing::test_split_message_lf_only_fallback`) but
+            //    deliberately does not accept the asymmetric
+            //    `\n\r\n` shape. rsip 0.4's framer is more permissive
+            //    and accepts. Pin:
+            //    `separator_lf_cr_lf_rsip_accepts_we_reject` in
+            //    `parser_diff.rs` (parallel-overnight 2026-05-06).
             //
             // None of these are genuine divergences for fuzz purposes.
             // When rsip is dropped from runtime deps at M10, this skip
@@ -1188,6 +1198,7 @@ pub fn assert_equivalent(bytes: &[u8]) {
                 || msg.contains("invalid Request-URI")
                 || msg.contains("missing ':'")
                 || msg.contains("reason phrase contains forbidden control byte")
+                || msg.contains("no header/body separator")
             {
                 return;
             }
@@ -1236,32 +1247,94 @@ pub fn assert_equivalent(bytes: &[u8]) {
             if has_unusual_byte && rsip_err.contains("Tokenizer error") {
                 return;
             }
-            // M11 fuzz finding #17 (run-#6 triage): the LFLF-separator
-            // asymmetry. Our `find_separator` falls back to `\n\n`
-            // when no `\r\n\r\n` is present (M2-A leniency, pinned by
+            // M11 fuzz finding #17 (run-#6 triage) + 2026-05-06
+            // parallel-overnight refinement: the LFLF-in-head
+            // asymmetry. Our `find_separator` prefers `\r\n\r\n` and
+            // falls back to `\n\n` (M2-A leniency, pinned by
             // `framing::test_split_message_lf_only_fallback`). rsip
-            // 0.4 has no such fallback: when the wire lacks CRLFCRLF
-            // and contains LFLF, rsip treats the whole input as a
-            // header section and Tokenizer-fails on whatever bytes
-            // sit after the LFLF (which we'd surface as body).
+            // 0.4's tokenizer doesn't recognise bare LFLF as a line
+            // boundary anywhere in the head: when the head section
+            // (the bytes up to whatever WE recognise as the separator)
+            // contains bare LFLF, rsip treats the whole stretch as a
+            // single header block and Tokenizer-fails on the LF bytes.
             //
             // The principled `has_unusual_byte` check above misses
-            // this because `find_header_separator` *also* falls back
-            // to LFLF, so the header section it inspects is just
-            // `SIP/2.0 200 OK` (pure ASCII). The asymmetry isn't
-            // about unusual bytes — it's about the separator
-            // recognition itself.
+            // this because LF (0x0A) is in the allowed head-section
+            // OCTET set; the asymmetry isn't about unusual bytes —
+            // it's about whether bare LF terminates a logical line.
+            //
+            // Detection: input contains LFLF anywhere AND rsip's
+            // failure is Tokenizer-class. Both subcases of this
+            // family (no-CRLFCRLF in input, or CRLFCRLF later in
+            // the body region) come down to the same root cause:
+            // we accept a bare LF as a line/section terminator;
+            // rsip does not, so its tokenizer chokes on the head.
+            //
+            // Original skip required `!has_crlfcrlf` (run-#6
+            // triage), which under-covered the case where the
+            // input also contains a CRLFCRLF later — the
+            // parallel-overnight 2026-05-06 run hit that subcase
+            // twice (`...\n\n 524\n\n` head + trailing `\r\n\r\n`,
+            // then a similar `...\n\n\n` shape) before this
+            // relaxation. A scoped check ("LFLF in head section
+            // only") was tried but is self-defeating: when our
+            // framer's LFLF-fallback selects an LFLF as the
+            // section boundary, the LFLF is *removed* from the
+            // head, so the scoped check returns false on exactly
+            // the inputs it should mask.
+            //
+            // Risk of false-mask: an unrelated rsip Tokenizer
+            // failure on input that incidentally contains a bare
+            // LF somewhere. Acceptable — Tokenizer-class failures
+            // on canonical CRLF-only inputs are still caught
+            // (has_bare_lf would be false there).
+            //
+            // Detection broadened from `\n\n` (LFLF) to "any bare
+            // LF" (LF not preceded by CR) after parallel-overnight
+            // 2026-05-06 run-#8 triage: rsip's tokenizer fails
+            // identically on `\n` followed by anything (CR, octet,
+            // EOF) — the LFLF-only check missed inputs like
+            // `...\n\r\n...` and `...\nX\n...` which exhibit the
+            // same root asymmetry. The single-LF nature of the
+            // narrowness is more fundamental than the LFLF shape.
             //
             // Pin: `lflf_separator_only_rsip_rejects_we_accept` in
-            // `parser_diff.rs`. Symmetric to pin #6
-            // (`body_starts_with_header_like_line_rsip_misinterprets`)
-            // which handles the `(Ok, Ok)` arm of the same family.
-            // When our parser stops accepting the LFLF fallback (or
-            // rsip starts accepting it), retire this skip with the
+            // `parser_diff.rs`. When our parser stops accepting
+            // bare LF anywhere in framing (or rsip starts accepting
+            // bare LF as a line break), retire this skip with the
             // pin.
-            let has_crlfcrlf = bytes.windows(4).any(|w| w == b"\r\n\r\n");
-            let has_lflf = bytes.windows(2).any(|w| w == b"\n\n");
-            if !has_crlfcrlf && has_lflf && rsip_err.contains("Tokenizer error") {
+            let has_bare_lf = bytes.iter().enumerate().any(|(i, &b)| {
+                b == 0x0A && (i == 0 || bytes[i - 1] != 0x0D)
+            });
+            if has_bare_lf && rsip_err.contains("Tokenizer error") {
+                return;
+            }
+            // M11 fuzz finding (parallel-overnight 2026-05-06 run-#9
+            // triage): rsip 0.4 performs UTF-8 validation on its
+            // header-value path and rejects with `invalid utf8` when
+            // the input contains non-UTF-8 byte sequences in a
+            // header value. Our parser keeps header values as
+            // `String` only via UTF-8-validated head section (the
+            // start_line + header_block must be valid UTF-8 to even
+            // reach header parsing — see `split_message` in
+            // `framing.rs:39`), but the body region is octets and
+            // we don't enforce UTF-8 elsewhere; further, our
+            // header-value parsing tolerates a wider non-ASCII
+            // OCTET range than rsip's tokenizer. RFC 3261 §7.3
+            // header field values are TEXT-UTF8-TRIM (UTF-8 by
+            // default) but real-world deployments routinely carry
+            // ISO-8859-x or binary content in proprietary headers;
+            // strict UTF-8 enforcement at parse time is rsip's
+            // policy choice, not an RFC mandate. We deliberately
+            // accept.
+            //
+            // No dedicated pin in `parser_diff.rs` yet — the
+            // existing `header_section_contains_nul_rsip_rejects_we_accept`
+            // pin (M11 finding #14) covers a related but distinct
+            // case (NUL byte in head section). A follow-up pin for
+            // pure non-UTF-8 byte sequences (e.g. lone 0xFF) would
+            // be a useful M5 documentation entry.
+            if rsip_err.contains("invalid utf8") || rsip_err.contains("invalid UTF-8") {
                 return;
             }
             panic!(
