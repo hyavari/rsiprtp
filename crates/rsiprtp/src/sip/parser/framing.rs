@@ -238,6 +238,19 @@ pub fn parse_status_line(line: &str) -> Result<(String, StatusCode, String), Sip
             "invalid SIP version in status line: {version}",
         )));
     }
+    // RFC 3261 §7.2 BNF: `extension-code = 3DIGIT`. The status code
+    // field is exactly 3 ASCII digits. Reject any other length to
+    // avoid silent leniency on zero-padded shapes — e.g. "0233" would
+    // otherwise integer-parse to 233, accepting a 4-character code as
+    // a 3-digit one. Length is the cheapest check and runs before the
+    // integer parse, so non-digit ASCII like "12X" still surfaces
+    // through the parse error below.
+    if code_str.len() != 3 {
+        return Err(SipError::Parse(format!(
+            "status code must be exactly 3 digits, got {} chars: {code_str:?}",
+            code_str.len(),
+        )));
+    }
     let code: u16 = code_str
         .parse()
         .map_err(|_| SipError::Parse(format!("invalid status code: {code_str}")))?;
@@ -585,6 +598,23 @@ mod tests {
     fn test_status_code_99_rejected() {
         let line = "SIP/2.0 99 ?";
         assert!(parse_status_line(line).is_err());
+    }
+
+    #[test]
+    fn test_status_code_4_digits_rejected() {
+        // RFC 3261 §7.2 BNF: `extension-code = 3DIGIT`. Surfaced by
+        // the 2026-05-06 parallel-overnight fuzz campaign as an
+        // (Err, Ok) divergence vs rsip 0.4: rsip's tokenizer rejects
+        // the 4-digit shape; we previously integer-parsed it to 233.
+        let line = "SIP/2.0 0233 25%";
+        let err = parse_status_line(line).expect_err("4-digit code must reject");
+        let SipError::Parse(msg) = err else {
+            panic!("expected SipError::Parse, got {err:?}")
+        };
+        assert!(
+            msg.contains("3 digits"),
+            "error should mention the 3-digit requirement; got: {msg}",
+        );
     }
 
     #[test]
