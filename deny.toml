@@ -23,12 +23,11 @@
 #
 # Advisory ignores:
 #   * RUSTSEC-2023-0071 (rsa Marvin Attack): no upstream fix available; the
-#     `rsa` crate is a DEV-only transitive dep through rcgen used by the
-#     transport-layer tests for self-signed TLS certs. Not present in any
-#     production binary.
-#   * RUSTSEC-2025-0134 (rustls-pemfile unmaintained): archived crate;
-#     migration to rustls-pki-types' PemObject is pending. No security
-#     impact.
+#     `rsa` crate is a DEV-only direct dep used by transport-layer tests to
+#     generate test PKCS#1 keys for PEM parsing. Test path does no RSA
+#     decryption and faces no attacker-controlled ciphertexts; the
+#     vulnerable code path is unreachable. Not present in any production
+#     binary.
 #   * RUSTSEC-2026-0119 (hickory-proto BinEncoder O(n²)): pulled in
 #     transitively via `hickory-resolver = "0.24"`. The vulnerability is
 #     in the *encoder* path — exploitable when an authoritative server (or
@@ -135,11 +134,7 @@ ignore = [
     # Not present in any production binary. No upstream fix available yet
     # (tracked at https://github.com/RustCrypto/RSA/issues/626). Re-check on
     # rsa >=0.10 release.
-    { id = "RUSTSEC-2023-0071", reason = "rsa crate is a dev-only transitive dep via rcgen; no fix upstream" },
-    # RUSTSEC-2025-0134 (rustls-pemfile): unmaintained warning. The crate is
-    # archived and users are asked to migrate to rustls-pki-types' PemObject
-    # trait. Tracked for migration; no security impact, just unmaintained.
-    { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile archived; pending migration to rustls-pki-types PemObject" },
+    { id = "RUSTSEC-2023-0071", reason = "rsa crate is a dev-only dep used to generate test PKCS#1 keys; no decryption path; no fix upstream" },
     # RUSTSEC-2026-0119 (hickory-proto BinEncoder O(n²)): vulnerability is in
     # the encoder path; rsiprtp is a stub resolver that only encodes small
     # outbound queries and decodes responses, so the amplification surface is

@@ -8,8 +8,6 @@ use bytes::{Bytes, BytesMut};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use rustls::{ClientConfig, RootCertStore, ServerConfig};
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::BufReader;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
@@ -334,28 +332,23 @@ impl Default for TlsClientConfig {
 
 /// Load certificates from a PEM file.
 fn load_certs(path: &Path) -> Result<Vec<CertificateDer<'static>>> {
-    let file = File::open(path)?;
-    let mut reader = BufReader::new(file);
-    let certs = rustls_pemfile::certs(&mut reader).collect::<std::result::Result<Vec<_>, _>>()?;
-    Ok(certs)
+    use rustls_pki_types::pem::PemObject;
+    let certs: std::result::Result<Vec<_>, _> = CertificateDer::pem_file_iter(path)
+        .map_err(|e| crate::core::TransportError::TlsError(format!("open cert PEM: {e}")))?
+        .collect();
+    certs.map_err(|e| crate::core::TransportError::TlsError(format!("parse cert PEM: {e}")).into())
 }
 
 /// Load private key from a PEM file.
 fn load_private_key(path: &Path) -> Result<PrivateKeyDer<'static>> {
-    let file = File::open(path)?;
-    let mut reader = BufReader::new(file);
-
-    // Try PKCS8 first, then RSA, then EC
-    for item in rustls_pemfile::read_all(&mut reader) {
-        match item? {
-            rustls_pemfile::Item::Pkcs8Key(key) => return Ok(PrivateKeyDer::Pkcs8(key)),
-            rustls_pemfile::Item::Pkcs1Key(key) => return Ok(PrivateKeyDer::Pkcs1(key)),
-            rustls_pemfile::Item::Sec1Key(key) => return Ok(PrivateKeyDer::Sec1(key)),
-            _ => continue,
-        }
-    }
-
-    Err(crate::core::TransportError::TlsError("No private key found in file".into()).into())
+    use rustls_pki_types::pem::{Error as PemError, PemObject};
+    PrivateKeyDer::from_pem_file(path).map_err(|e| {
+        let msg = match e {
+            PemError::NoItemsFound => "No private key found in file".to_string(),
+            other => format!("read key PEM: {other}"),
+        };
+        crate::core::TransportError::TlsError(msg).into()
+    })
 }
 
 /// TLS transport for SIP messages.
@@ -1604,14 +1597,13 @@ aGVsbG8=\n\
 
     /// Create a test server config from generated certs
     fn create_server_config(cert_pem: &[u8], key_pem: &[u8]) -> ServerConfig {
-        use rustls_pemfile::{certs, private_key};
-        use std::io::Cursor;
+        use rustls_pki_types::pem::PemObject;
 
-        let certs: Vec<CertificateDer<'static>> = certs(&mut Cursor::new(cert_pem))
+        let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(cert_pem)
             .map(|r| r.unwrap())
             .collect();
 
-        let key = private_key(&mut Cursor::new(key_pem)).unwrap().unwrap();
+        let key = PrivateKeyDer::from_pem_slice(key_pem).unwrap();
 
         ServerConfig::builder()
             .with_no_client_auth()
@@ -1621,13 +1613,12 @@ aGVsbG8=\n\
 
     fn create_tls12_server_config(cert_pem: &[u8], key_pem: &[u8]) -> ServerConfig {
         use rustls::version::TLS12;
-        use rustls_pemfile::{certs, private_key};
-        use std::io::Cursor;
+        use rustls_pki_types::pem::PemObject;
 
-        let certs: Vec<CertificateDer<'static>> = certs(&mut Cursor::new(cert_pem))
+        let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(cert_pem)
             .map(|r| r.unwrap())
             .collect();
-        let key = private_key(&mut Cursor::new(key_pem)).unwrap().unwrap();
+        let key = PrivateKeyDer::from_pem_slice(key_pem).unwrap();
 
         ServerConfig::builder_with_protocol_versions(&[&TLS12])
             .with_no_client_auth()
@@ -1637,11 +1628,10 @@ aGVsbG8=\n\
 
     /// Create a test client config that trusts the test cert
     fn create_client_config(cert_pem: &[u8]) -> ClientConfig {
-        use rustls_pemfile::certs;
-        use std::io::Cursor;
+        use rustls_pki_types::pem::PemObject;
 
         let mut root_store = RootCertStore::empty();
-        let certs: Vec<CertificateDer<'static>> = certs(&mut Cursor::new(cert_pem))
+        let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(cert_pem)
             .map(|r| r.unwrap())
             .collect();
 
