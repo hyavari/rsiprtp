@@ -681,6 +681,12 @@ impl TcpTransport {
             } else {
                 TcpSocket::new_v6()?
             };
+            // SO_REUSEADDR allows rebinding the same local port
+            // immediately after the previous connection is closed,
+            // avoiding EADDRINUSE from TIME_WAIT state. Needed for
+            // protocols (IMS TS 33.203) where the UE must reuse its
+            // negotiated port-c for every protected REGISTER.
+            socket.set_reuseaddr(true)?;
             socket.bind(bind_addr)?;
             socket.connect(addr).await?
         } else {
